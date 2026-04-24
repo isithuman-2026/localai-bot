@@ -56,14 +56,8 @@ class AlertsCog(commands.Cog):
             await self._triage(message)
 
     async def _triage(self, message: discord.Message) -> None:
-        recent = []
-        async for m in message.channel.history(limit=5):
-            recent.append({"role": "assistant" if m.author.bot else "user", "content": m.content})
-        recent.reverse()
-
         messages = [
             {"role": "system", "content": TRIAGE_PROMPT},
-        ] + recent + [
             {"role": "user", "content": f"Alert: {message.content}"},
         ]
         answer = await llm.chat(messages)
