@@ -1,0 +1,13 @@
+services:
+  localai-jarvis:
+    build: .
+    container_name: localai-jarvis
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - ai-agent-net
+
+networks:
+  ai-agent-net:
+    external: true
+    name: ai-agent-net
