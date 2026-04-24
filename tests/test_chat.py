@@ -65,7 +65,7 @@ async def test_on_message_responds_to_mention():
     msg = MagicMock(spec=discord.Message)
     msg.author = MagicMock()
     msg.author.bot = False
-    msg.author.display_name = "boss"
+    msg.author.display_name = "alice"
     msg.mentions = [bot_user]
     msg.content = f"<@999> what is the disk usage?"
     msg.channel = MagicMock()
@@ -87,7 +87,7 @@ async def test_respond_calls_llm_and_replies():
     msg.channel = MagicMock()
     msg.channel.id = 42
     msg.reply = AsyncMock()
-    with patch("cogs.chat.llm.chat", new_callable=AsyncMock, return_value="node1 disk at 90%") as mock_chat:
+    with patch("cogs.chat.llm.chat", new_callable=AsyncMock, return_value="server01 disk at 90%") as mock_chat:
         await cog._respond(msg, "disk usage?")
         mock_chat.assert_called_once()
         call_args = mock_chat.call_args[0][0]
@@ -95,4 +95,4 @@ async def test_respond_calls_llm_and_replies():
         assert call_args[0]["content"] == SYSTEM_PROMPT
         assert call_args[-1]["role"] == "user"
         assert call_args[-1]["content"] == "disk usage?"
-        msg.reply.assert_called_once_with("node1 disk at 90%")
+        msg.reply.assert_called_once_with("server01 disk at 90%")

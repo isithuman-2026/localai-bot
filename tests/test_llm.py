@@ -9,7 +9,7 @@ async def test_chat_returns_content():
     fake_response = MagicMock()
     fake_response.raise_for_status = MagicMock()
     fake_response.json.return_value = {
-        "choices": [{"message": {"content": "disk full on vault44"}}]
+        "choices": [{"message": {"content": "disk full on server01"}}]
     }
 
     mock_client = AsyncMock()
@@ -20,7 +20,7 @@ async def test_chat_returns_content():
     with patch("llm.httpx.AsyncClient", return_value=mock_client):
         result = await llm.chat([{"role": "user", "content": "what happened?"}])
 
-    assert result == "disk full on vault44"
+    assert result == "disk full on server01"
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args
     assert call_kwargs[1]["json"]["model"] == "qwen2.5-14b"
