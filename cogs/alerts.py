@@ -46,8 +46,8 @@ class AlertsCog(commands.Cog):
                 await self._chat_respond(message, content)
             return
 
-        # Auto-triage: bot/webhook message in alerts channel
-        if message.author.bot:
+        # Auto-triage: bot/webhook message in alerts channel (skip own messages)
+        if message.author.bot and message.author.id != self.bot.user.id:
             if message.id in self._seen:
                 return
             self._seen.add(message.id)
