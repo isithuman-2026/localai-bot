@@ -11,6 +11,8 @@ from pathlib import Path
 VAULT_PATH = Path(os.environ.get("VAULT_PATH", "/vault"))
 MAX_NOTE_CHARS = 800
 MAX_NOTES = 3
+BASE_NOTE = "TheLab/jarvis-triage-base.md"
+BASE_NOTE_MAX_CHARS = 3000
 
 # Search order: homelab-specific first, then security
 SEARCH_DIRS = ["TheLab", "Areas/Security", "Areas/Infrastructure"]
@@ -50,39 +52,55 @@ def _snippet(path: Path) -> str:
     return text[:MAX_NOTE_CHARS]
 
 
+def _load_base() -> str:
+    """Always load the base triage context note if present."""
+    base_path = VAULT_PATH / BASE_NOTE
+    if not base_path.exists():
+        return ""
+    try:
+        text = base_path.read_text(errors="ignore")
+    except OSError:
+        return ""
+    text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
+    text = re.sub(r"#\w+", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text[:BASE_NOTE_MAX_CHARS]
+
+
 def search(alert_text: str) -> str:
     """Return vault context string relevant to alert_text, or empty string."""
     if not VAULT_PATH.exists():
         return ""
 
-    keywords = _keywords(alert_text)
-    if not keywords:
-        return ""
-
-    candidates: list[tuple[int, Path]] = []
-    for dir_name in SEARCH_DIRS:
-        search_dir = VAULT_PATH / dir_name
-        if not search_dir.exists():
-            continue
-        for md in search_dir.rglob("*.md"):
-            score = _score_file(md, keywords)
-            if score > 0:
-                candidates.append((score, md))
-
-    if not candidates:
-        return ""
-
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    top = candidates[:MAX_NOTES]
-
     parts = []
-    for score, path in top:
-        rel = path.relative_to(VAULT_PATH)
-        snippet = _snippet(path)
-        if snippet:
-            parts.append(f"### {rel}\n{snippet}")
+
+    base = _load_base()
+    if base:
+        parts.append(f"### Homelab topology (TheLab/jarvis-triage-base.md)\n{base}")
+
+    keywords = _keywords(alert_text)
+    if keywords:
+        candidates: list[tuple[int, Path]] = []
+        base_path = VAULT_PATH / BASE_NOTE
+        for dir_name in SEARCH_DIRS:
+            search_dir = VAULT_PATH / dir_name
+            if not search_dir.exists():
+                continue
+            for md in search_dir.rglob("*.md"):
+                if md == base_path:
+                    continue  # already included
+                score = _score_file(md, keywords)
+                if score > 0:
+                    candidates.append((score, md))
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        for score, path in candidates[:MAX_NOTES]:
+            rel = path.relative_to(VAULT_PATH)
+            snippet = _snippet(path)
+            if snippet:
+                parts.append(f"### {rel}\n{snippet}")
 
     if not parts:
         return ""
 
-    return "Relevant homelab notes from vault:\n\n" + "\n\n".join(parts)
+    return "Homelab notes from vault:\n\n" + "\n\n".join(parts)
