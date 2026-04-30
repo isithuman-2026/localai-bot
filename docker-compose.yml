@@ -8,8 +8,10 @@ services:
     environment:
       - VAULT_PATH=/vault
       - LOKI_URL=http://monitoring-loki:3100
+      - CHROMA_PATH=/data/chroma
     volumes:
       - /opt/obsidian-vault:/vault:ro
+      - chroma_data:/data/chroma
     networks:
       - ai-agent-net
 
@@ -17,3 +19,6 @@ networks:
   ai-agent-net:
     external: true
     name: ai-agent-net
+
+volumes:
+  chroma_data:
