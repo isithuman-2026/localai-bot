@@ -57,14 +57,12 @@ def _build_collection() -> chromadb.Collection | None:
     if not VAULT_PATH.exists():
         return None
 
-    client = chromadb.PersistentClient(path=str(CHROMA_PATH))
+    client = chromadb.EphemeralClient()
     ef = _FastEmbedFn()
-
     try:
         client.delete_collection("vault")
     except Exception:
         pass
-
     collection = client.create_collection("vault", embedding_function=ef)
 
     base_path = VAULT_PATH / BASE_NOTE
