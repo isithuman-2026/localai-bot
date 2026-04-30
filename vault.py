@@ -1,104 +1,116 @@
 """
-Search the Obsidian vault for notes relevant to an alert.
-Prioritises TheLab/ (homelab-specific) then Areas/Security/.
-Returns a markdown snippet to inject into triage context.
+Semantic search of Obsidian vault using ChromaDB + fastembed.
+Returns markdown snippet for triage context injection.
 """
 
 import os
 import re
 from pathlib import Path
+from typing import List
+
+import chromadb
+from chromadb.utils.embedding_functions import EmbeddingFunction
+from fastembed import TextEmbedding
 
 VAULT_PATH = Path(os.environ.get("VAULT_PATH", "/vault"))
+CHROMA_PATH = os.environ.get("CHROMA_PATH", "/chroma_data")
 MAX_NOTE_CHARS = 800
 MAX_NOTES = 3
 BASE_NOTE = "TheLab/jarvis-triage-base.md"
 BASE_NOTE_MAX_CHARS = 3000
-
-# Search order: homelab-specific first, then security
 SEARCH_DIRS = ["TheLab", "Areas/Security", "Areas/Infrastructure"]
 
-
-def _keywords(text: str) -> list[str]:
-    """Extract meaningful words from alert text for vault search."""
-    stop = {"the", "a", "an", "is", "in", "on", "at", "to", "of", "and", "or", "for", "with", "from"}
-    words = re.findall(r"[a-zA-Z]{4,}", text.lower())
-    return list(dict.fromkeys(w for w in words if w not in stop))[:10]
+_embed_model: TextEmbedding | None = None
 
 
-def _score_file(path: Path, keywords: list[str]) -> int:
-    """Count keyword hits in filename + first 2000 chars of content."""
-    try:
-        content = path.read_text(errors="ignore")[:2000].lower()
-    except OSError:
-        return 0
-    name = path.stem.lower()
-    score = 0
-    for kw in keywords:
-        if kw in name:
-            score += 3
-        score += content.count(kw)
-    return score
+def _get_embed_model() -> TextEmbedding:
+    global _embed_model
+    if _embed_model is None:
+        _embed_model = TextEmbedding("BAAI/bge-small-en-v1.5")
+    return _embed_model
 
 
-def _snippet(path: Path) -> str:
-    try:
-        text = path.read_text(errors="ignore")
-    except OSError:
-        return ""
-    # Strip obsidian links/tags, collapse whitespace
+class _FastEmbedFn(EmbeddingFunction):
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        model = _get_embed_model()
+        return [v for v in model.embed(input)]
+
+
+def _clean(text: str) -> str:
     text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
     text = re.sub(r"#\w+", "", text)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text[:MAX_NOTE_CHARS]
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _load_base() -> str:
-    """Always load the base triage context note if present."""
     base_path = VAULT_PATH / BASE_NOTE
     if not base_path.exists():
         return ""
     try:
-        text = base_path.read_text(errors="ignore")
+        return _clean(base_path.read_text(errors="ignore"))[:BASE_NOTE_MAX_CHARS]
     except OSError:
         return ""
-    text = re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
-    text = re.sub(r"#\w+", "", text)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return text[:BASE_NOTE_MAX_CHARS]
+
+
+def _build_collection() -> chromadb.Collection | None:
+    if not VAULT_PATH.exists():
+        return None
+
+    client = chromadb.PersistentClient(path=str(CHROMA_PATH))
+    ef = _FastEmbedFn()
+
+    try:
+        client.delete_collection("vault")
+    except Exception:
+        pass
+
+    collection = client.create_collection("vault", embedding_function=ef)
+
+    base_path = VAULT_PATH / BASE_NOTE
+    docs, ids, metas = [], [], []
+
+    for dir_name in SEARCH_DIRS:
+        search_dir = VAULT_PATH / dir_name
+        if not search_dir.exists():
+            continue
+        for md in search_dir.rglob("*.md"):
+            if md == base_path:
+                continue
+            try:
+                text = md.read_text(errors="ignore")
+            except OSError:
+                continue
+            rel = str(md.relative_to(VAULT_PATH))
+            doc_id = rel.replace("/", "_").replace("\\", "_").replace(" ", "-")
+            docs.append(_clean(text)[:2000])
+            ids.append(doc_id)
+            metas.append({"path": rel})
+
+    if docs:
+        collection.add(documents=docs, ids=ids, metadatas=metas)
+
+    return collection
+
+
+_collection = _build_collection()
 
 
 def search(alert_text: str) -> str:
-    """Return vault context string relevant to alert_text, or empty string."""
     if not VAULT_PATH.exists():
         return ""
 
     parts = []
-
     base = _load_base()
     if base:
-        parts.append(f"### Homelab topology (TheLab/jarvis-triage-base.md)\n{base}")
+        parts.append(f"### Homelab topology ({BASE_NOTE})\n{base}")
 
-    keywords = _keywords(alert_text)
-    if keywords:
-        candidates: list[tuple[int, Path]] = []
-        base_path = VAULT_PATH / BASE_NOTE
-        for dir_name in SEARCH_DIRS:
-            search_dir = VAULT_PATH / dir_name
-            if not search_dir.exists():
-                continue
-            for md in search_dir.rglob("*.md"):
-                if md == base_path:
-                    continue  # already included
-                score = _score_file(md, keywords)
-                if score > 0:
-                    candidates.append((score, md))
-
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        for score, path in candidates[:MAX_NOTES]:
-            rel = path.relative_to(VAULT_PATH)
-            snippet = _snippet(path)
-            if snippet:
-                parts.append(f"### {rel}\n{snippet}")
+    if _collection is not None and _collection.count() > 0:
+        n = min(MAX_NOTES, _collection.count())
+        results = _collection.query(query_texts=[alert_text], n_results=n)
+        for i, doc in enumerate(results["documents"][0]):
+            meta = results["metadatas"][0][i]
+            parts.append(f"### {meta['path']}\n{doc[:MAX_NOTE_CHARS]}")
 
     if not parts:
         return ""
