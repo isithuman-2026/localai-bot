@@ -43,3 +43,42 @@ async def test_chat_uses_custom_url():
             result = await llm.chat([{"role": "user", "content": "hi"}])
 
     assert mock_client.post.call_args[0][0] == "http://custom-litellm:4000/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_chat_json_returns_parsed_dict():
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json.return_value = {
+        "choices": [{"message": {"content": '{"severity": "high", "cause": "disk full", "confidence": 0.9}'}}]
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=fake_response)
+
+    with patch("llm.httpx.AsyncClient", return_value=mock_client):
+        result = await llm.chat_json([{"role": "user", "content": "triage this"}])
+
+    assert result == {"severity": "high", "cause": "disk full", "confidence": 0.9}
+    call_kwargs = mock_client.post.call_args
+    assert call_kwargs[1]["json"]["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_chat_json_raises_on_invalid_json():
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json.return_value = {
+        "choices": [{"message": {"content": "not valid json at all"}}]
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=fake_response)
+
+    with patch("llm.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(Exception):
+            await llm.chat_json([{"role": "user", "content": "triage this"}])
