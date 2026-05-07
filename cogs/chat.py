@@ -1,6 +1,9 @@
+import os
 import discord
 from discord.ext import commands
 import llm
+
+ALERTS_CHANNEL_ID = int(os.environ.get("ALERTS_CHANNEL_ID", "1488857934061633697"))
 
 SYSTEM_PROMPT = (
     "You are JARVIS, a homelab AI assistant. Be concise: one to three sentences max. "
@@ -30,6 +33,8 @@ class ChatCog(commands.Cog):
         if message.author.bot:
             return
         if self.bot.user not in message.mentions:
+            return
+        if message.channel.id == ALERTS_CHANNEL_ID:
             return
         content = message.content
         for fmt in (f"<@{self.bot.user.id}>", f"<@!{self.bot.user.id}>"):

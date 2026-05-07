@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from discord.ext import commands
 import discord
 
-from cogs.chat import ChatCog, SYSTEM_PROMPT, _trim
+from cogs.chat import ChatCog, SYSTEM_PROMPT, _trim, ALERTS_CHANNEL_ID
 
 
 def make_bot():
@@ -50,6 +50,25 @@ async def test_on_message_ignores_no_mention():
     msg.author = MagicMock()
     msg.author.bot = False
     msg.mentions = []
+    with patch.object(cog, "_respond", new_callable=AsyncMock) as mock_respond:
+        await cog.on_message(msg)
+        mock_respond.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_on_message_ignores_alerts_channel():
+    bot = make_bot()
+    cog = ChatCog(bot)
+    bot_user = MagicMock()
+    bot_user.id = 999
+    bot.user = bot_user
+    msg = MagicMock(spec=discord.Message)
+    msg.author = MagicMock()
+    msg.author.bot = False
+    msg.mentions = [bot_user]
+    msg.content = "<@999> what caused this?"
+    msg.channel = MagicMock()
+    msg.channel.id = ALERTS_CHANNEL_ID
     with patch.object(cog, "_respond", new_callable=AsyncMock) as mock_respond:
         await cog.on_message(msg)
         mock_respond.assert_not_called()
