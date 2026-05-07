@@ -334,7 +334,7 @@ class AlertsCog(commands.Cog):
             return
 
         hypotheses = result.get("hypotheses")
-        primary_cause = result.get("cause", "")
+        primary_cause = result.get("cause") or result.get("root_cause", "")
         primary_confidence = result.get("confidence", 0.0)
         if hypotheses:
             top = hypotheses[0] if hypotheses else {}
