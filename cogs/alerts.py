@@ -53,6 +53,20 @@ TRIAGE_PROMPT_VULN_JSON = (
     "- No preamble. JSON only."
 )
 
+VERIFICATION_PROMPT_JSON = (
+    "You are a homelab ops assistant performing root cause verification.\n\n"
+    + HOMELAB_CONTEXT
+    + "\nYou previously diagnosed an alert. Below is your initial assessment and the actual log evidence.\n"
+    "Re-evaluate and respond ONLY with a JSON object matching this schema:\n"
+    '{"root_cause":"string","confidence":0.0,"evidence":["log line or fact that supports conclusion"],'
+    '"recommended_actions":["ssh boss@node1 <exact command>"],"severity":"critical|high|medium|low"}\n\n'
+    "Rules:\n"
+    "- evidence: cite specific log lines or facts, max 3\n"
+    "- recommended_actions: max 3, copy-pasteable\n"
+    "- confidence: increase if logs support the hypothesis, decrease if contradicted\n"
+    "- No preamble. No explanation. JSON only."
+)
+
 TRIAGE_COOLDOWN_SECS = 3600
 
 _UPDATE_RE = re.compile(r"security updates installed", re.IGNORECASE)
@@ -275,6 +289,10 @@ class AlertsCog(commands.Cog):
             memory.log_observation(event=content[:200], summary=answer[:500], host=alert_label)
             return
 
+        # Verification pass: second LLM call when confidence is low and logs are available
+        if result.get("confidence", 1.0) < 0.6 and loki_ctx:
+            result = await self._verification_pass(result, loki_ctx, content)
+
         if result.get("suppress"):
             memory.add_suppression(fp, reason=result.get("cause", "LLM-flagged noise"), expires=0)
             await message.reply(f"Suppressed (LLM-flagged): {result.get('cause', 'persistent noise')}")
@@ -299,3 +317,30 @@ class AlertsCog(commands.Cog):
             confidence=result.get("confidence", 0.0),
             severity=result.get("severity", ""),
         )
+
+    async def _verification_pass(
+        self,
+        first_result: dict,
+        loki_ctx: str,
+        alert_content: str,
+    ) -> dict:
+        user_content = (
+            f"Initial assessment:\n"
+            f"Cause: {first_result.get('cause', '')}\n"
+            f"Confidence: {first_result.get('confidence', 0.0)}\n\n"
+            f"Log evidence:\n{loki_ctx}\n\n"
+            f"Alert: {alert_content}"
+        )
+        messages = [
+            {"role": "system", "content": VERIFICATION_PROMPT_JSON},
+            {"role": "user", "content": user_content},
+        ]
+        try:
+            verified = await llm.chat_json(messages)
+            if "severity" not in verified:
+                verified["severity"] = first_result.get("severity", "medium")
+            if "commands" not in verified and "recommended_actions" in verified:
+                verified["commands"] = verified["recommended_actions"]
+            return verified
+        except Exception:
+            return first_result

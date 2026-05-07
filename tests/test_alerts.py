@@ -6,7 +6,7 @@ import os
 
 os.environ.setdefault("ALERTS_CHANNEL_ID", "1488857934061633697")
 
-from cogs.alerts import AlertsCog, TRIAGE_PROMPT_JSON, ASK_PROMPT, _format_triage_reply
+from cogs.alerts import AlertsCog, TRIAGE_PROMPT_JSON, ASK_PROMPT, _format_triage_reply, VERIFICATION_PROMPT_JSON
 
 
 @pytest.fixture(autouse=True)
@@ -318,3 +318,82 @@ def test_format_triage_reply_caps_commands_at_three():
     reply = _format_triage_reply(result)
     assert "cmd4" not in reply
     assert "cmd3" in reply
+
+
+FAKE_LOW_CONFIDENCE_RESULT = {
+    "severity": "medium",
+    "cause": "Unknown network issue",
+    "confidence": 0.45,
+    "commands": ["ssh boss@node1 ip link show"],
+    "next_step": "Investigate network interface",
+    "suppress": False,
+}
+
+FAKE_VERIFIED_RESULT = {
+    "root_cause": "eth4 packet loss due to driver bug",
+    "confidence": 0.82,
+    "evidence": ["kernel: eth4: tx timeout", "kernel: eth4: reset adapter"],
+    "recommended_actions": ["ssh boss@node1 dmesg | grep eth4"],
+    "severity": "medium",
+}
+
+
+@pytest.mark.asyncio
+async def test_verification_pass_triggered_on_low_confidence():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+    loki_logs = "Recent logs from Loki:\n```\nkernel: eth4: tx timeout\n```"
+
+    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, side_effect=[FAKE_LOW_CONFIDENCE_RESULT, FAKE_VERIFIED_RESULT]) as mock_json, \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=loki_logs), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+        assert mock_json.call_count == 2
+        second_call_messages = mock_json.call_args_list[1][0][0]
+        assert second_call_messages[0]["content"] == VERIFICATION_PROMPT_JSON
+        reply_text = msg.reply.call_args[0][0]
+        assert "eth4 packet loss due to driver bug" in reply_text
+        assert "eth4: tx timeout" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_verification_pass_skipped_when_no_loki_context():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+
+    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_LOW_CONFIDENCE_RESULT) as mock_json, \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+        assert mock_json.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_verification_pass_skipped_on_high_confidence():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+    loki_logs = "Recent logs from Loki:\n```\nsomething\n```"
+
+    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_TRIAGE_RESULT) as mock_json, \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=loki_logs), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+        assert mock_json.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_verification_pass_failure_falls_back_to_first_result():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+    loki_logs = "Recent logs from Loki:\n```\nsome log\n```"
+
+    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, side_effect=[FAKE_LOW_CONFIDENCE_RESULT, ValueError("bad json")]), \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=loki_logs), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+        reply_text = msg.reply.call_args[0][0]
+        assert "Unknown network issue" in reply_text
