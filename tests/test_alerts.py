@@ -6,7 +6,7 @@ import os
 
 os.environ.setdefault("ALERTS_CHANNEL_ID", "1488857934061633697")
 
-from cogs.alerts import AlertsCog, TRIAGE_PROMPT_JSON, ASK_PROMPT, _format_triage_reply, VERIFICATION_PROMPT_JSON
+from cogs.alerts import AlertsCog, TRIAGE_PROMPT_JSON, ASK_PROMPT, _format_triage_reply, VERIFICATION_PROMPT_JSON, TRIAGE_PROMPT_HYPOTHESIS
 
 
 @pytest.fixture(autouse=True)
@@ -15,6 +15,12 @@ def mock_memory():
          patch("cogs.alerts.memory.is_suppressed", return_value=(False, "")), \
          patch("cogs.alerts.memory.log_observation", return_value=1), \
          patch("cogs.alerts.memory.check_auto_suppress", return_value=(False, "")), \
+         patch("cogs.alerts.memory.get_alert_history", return_value={
+             "fingerprint": "fp_test",
+             "occurrence_count": 1,
+             "last_seen": 1700000000,
+             "auto_suppressed": 0,
+         }), \
          patch("cogs.alerts.memory.upsert_alert_history", return_value={
              "fingerprint": "fp_test",
              "occurrence_count": 1,
@@ -397,3 +403,74 @@ async def test_verification_pass_failure_falls_back_to_first_result():
         await cog.on_message(msg)
         reply_text = msg.reply.call_args[0][0]
         assert "Unknown network issue" in reply_text
+
+
+FAKE_HYPOTHESIS_RESULT = {
+    "severity": "high",
+    "hypotheses": [
+        {"cause": "OOM killer terminated container", "confidence": 0.75, "commands": ["ssh boss@node1 dmesg | grep -i 'oom\\|kill'"]},
+        {"cause": "Docker daemon crash", "confidence": 0.55, "commands": ["ssh boss@node1 journalctl -u docker --since '30min ago'"]},
+        {"cause": "Host kernel panic", "confidence": 0.20, "commands": ["ssh boss@node1 last -x | head -10"]},
+    ],
+    "next_step": "Check dmesg first",
+    "suppress": False,
+}
+
+
+@pytest.mark.asyncio
+async def test_hypothesis_prompt_used_for_new_fingerprint():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True, content="container down alert")
+
+    with patch("cogs.alerts.memory.get_alert_history", return_value=None), \
+         patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_HYPOTHESIS_RESULT) as mock_json, \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+        call_messages = mock_json.call_args_list[0][0][0]
+        assert call_messages[0]["content"] == TRIAGE_PROMPT_HYPOTHESIS
+
+
+@pytest.mark.asyncio
+async def test_single_cause_prompt_used_for_known_fingerprint():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True, content="container down alert")
+    existing_history = {"fingerprint": "fp_known", "occurrence_count": 3, "last_seen": 1700000000}
+
+    with patch("cogs.alerts.memory.get_alert_history", return_value=existing_history), \
+         patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_TRIAGE_RESULT) as mock_json, \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+        call_messages = mock_json.call_args_list[0][0][0]
+        assert call_messages[0]["content"] == TRIAGE_PROMPT_JSON
+
+
+@pytest.mark.asyncio
+async def test_hypothesis_reply_shows_all_three():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True, content="container down alert")
+
+    with patch("cogs.alerts.memory.get_alert_history", return_value=None), \
+         patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_HYPOTHESIS_RESULT), \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+        reply_text = msg.reply.call_args[0][0]
+        assert "OOM killer" in reply_text
+        assert "Docker daemon crash" in reply_text
+        assert "Host kernel panic" in reply_text
+        assert "75%" in reply_text
+
+
+def test_format_triage_reply_renders_hypotheses():
+    result = FAKE_HYPOTHESIS_RESULT
+    reply = _format_triage_reply(result)
+    assert "**[HIGH]**" in reply
+    assert "OOM killer" in reply
+    assert "75%" in reply
+    assert "Docker daemon crash" in reply
+    assert "dmesg | grep" in reply

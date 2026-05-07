@@ -67,6 +67,20 @@ VERIFICATION_PROMPT_JSON = (
     "- No preamble. No explanation. JSON only."
 )
 
+TRIAGE_PROMPT_HYPOTHESIS = (
+    "You are a homelab security and ops assistant. You have full knowledge of this homelab's topology and services.\n\n"
+    + HOMELAB_CONTEXT
+    + "\nAnalyse the alert. Generate up to 3 hypotheses ordered by confidence descending.\n"
+    "Respond ONLY with a JSON object matching this exact schema:\n"
+    '{"severity":"critical|high|medium|low","hypotheses":[{"cause":"string","confidence":0.0,"commands":["ssh boss@node1 <cmd>"]}],'
+    '"next_step":"string","suppress":false}\n\n'
+    "Rules:\n"
+    "- Max 3 hypotheses, highest confidence first\n"
+    "- commands per hypothesis: diagnostic commands to verify that specific hypothesis only\n"
+    "- suppress: true only for known persistent noise\n"
+    "- No preamble. JSON only."
+)
+
 TRIAGE_COOLDOWN_SECS = 3600
 
 _UPDATE_RE = re.compile(r"security updates installed", re.IGNORECASE)
@@ -102,31 +116,48 @@ def _fingerprint(content: str) -> str:
 
 def _format_triage_reply(result: dict, history: dict | None = None) -> str:
     severity = result.get("severity", "unknown").upper()
-    cause = result.get("cause") or result.get("root_cause", "unknown")
-    confidence = result.get("confidence", 0.0)
-    commands = result.get("commands") or result.get("recommended_actions", [])
     next_step = result.get("next_step", "")
     evidence = result.get("evidence", [])
 
-    lines = [f"**[{severity}]** {cause}"]
-    lines.append(f"Confidence: {confidence:.0%}")
+    lines = [f"**[{severity}]**"]
 
     if history and history.get("occurrence_count", 1) > 1:
         count = history["occurrence_count"]
         last = time.strftime("%H:%M UTC", time.gmtime(history["last_seen"]))
         lines.append(f"Seen: {count}x (last: {last})")
 
-    if evidence:
-        lines.append("\n**Evidence:**")
-        for e in evidence[:3]:
-            lines.append(f"- {e}")
+    hypotheses = result.get("hypotheses")
+    if hypotheses:
+        for i, h in enumerate(hypotheses[:3]):
+            cause = h.get("cause", "")
+            conf = h.get("confidence", 0.0)
+            cmds = h.get("commands", [])
+            marker = ">" if i == 0 else " "
+            lines.append(f"\n{marker} **H{i+1} ({conf:.0%}):** {cause}")
+            if cmds:
+                lines.append("  ```")
+                for cmd in cmds[:2]:
+                    lines.append(f"  {cmd}")
+                lines.append("  ```")
+    else:
+        cause = result.get("cause") or result.get("root_cause", "unknown")
+        confidence = result.get("confidence", 0.0)
+        commands = result.get("commands") or result.get("recommended_actions", [])
 
-    if commands:
-        lines.append("\n**Suggested commands:**")
-        lines.append("```")
-        for cmd in commands[:3]:
-            lines.append(cmd)
-        lines.append("```")
+        lines.append(f"{cause}")
+        lines.append(f"Confidence: {confidence:.0%}")
+
+        if evidence:
+            lines.append("\n**Evidence:**")
+            for e in evidence[:3]:
+                lines.append(f"- {e}")
+
+        if commands:
+            lines.append("\n**Suggested commands:**")
+            lines.append("```")
+            for cmd in commands[:3]:
+                lines.append(cmd)
+            lines.append("```")
 
     if next_step:
         lines.append(f"\n**Next:** {next_step}")
@@ -245,7 +276,11 @@ class AlertsCog(commands.Cog):
             cutoff = now - TRIAGE_COOLDOWN_SECS
             self._triage_cooldowns = {k: v for k, v in self._triage_cooldowns.items() if v[1] > cutoff}
 
-        system_prompt = TRIAGE_PROMPT_JSON
+        history_check = memory.get_alert_history(fp)
+        if history_check is None:
+            system_prompt = TRIAGE_PROMPT_HYPOTHESIS
+        else:
+            system_prompt = TRIAGE_PROMPT_JSON
         vuln_context = ""
 
         if _UPDATE_RE.search(content):
@@ -298,10 +333,18 @@ class AlertsCog(commands.Cog):
             await message.reply(f"Suppressed (LLM-flagged): {result.get('cause', 'persistent noise')}")
             return
 
+        hypotheses = result.get("hypotheses")
+        primary_cause = result.get("cause", "")
+        primary_confidence = result.get("confidence", 0.0)
+        if hypotheses:
+            top = hypotheses[0] if hypotheses else {}
+            primary_cause = top.get("cause", "")
+            primary_confidence = top.get("confidence", 0.0)
+
         history = memory.upsert_alert_history(
             fingerprint=fp,
-            root_cause=result.get("cause", ""),
-            confidence=result.get("confidence", 0.0),
+            root_cause=primary_cause,
+            confidence=primary_confidence,
             severity=result.get("severity", ""),
         )
 
@@ -310,11 +353,11 @@ class AlertsCog(commands.Cog):
 
         memory.log_observation(
             event=content[:200],
-            summary=result.get("cause", ""),
+            summary=primary_cause,
             host=alert_label,
             fingerprint=fp,
-            root_cause=result.get("cause", ""),
-            confidence=result.get("confidence", 0.0),
+            root_cause=primary_cause,
+            confidence=primary_confidence,
             severity=result.get("severity", ""),
         )
 
