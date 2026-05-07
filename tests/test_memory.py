@@ -74,8 +74,7 @@ def test_suppression_permanent():
 def test_add_suppression_replace():
     memory.add_suppression("pattern_x", reason="first")
     memory.add_suppression("pattern_x", reason="updated")
-    with patch("memory.DB_PATH", memory.DB_PATH):
-        suppressed, reason = memory.is_suppressed("contains pattern_x here")
+    suppressed, reason = memory.is_suppressed("contains pattern_x here")
     assert suppressed is True
     assert reason == "updated"
 

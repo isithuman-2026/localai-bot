@@ -92,8 +92,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             try:
                 conn.execute(stmt)
                 conn.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[memory] migration skipped ({col}): {exc}")
 
 
 def write_fact(topic: str, content: str, source: str = "") -> int:
