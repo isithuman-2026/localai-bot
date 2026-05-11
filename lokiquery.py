@@ -16,12 +16,22 @@ MAX_LINES = 30
 
 # Maps alert label keywords to focused LogQL queries
 _QUERY_MAP = {
-    "fail2ban": '{source="journald"} |~ "fail2ban" | line_format "{{.MESSAGE}}"',
-    "ssh": '{source="journald"} |~ "sshd.*(Failed|Invalid|Accepted|error)"',
+    "fail2ban": '{source="fail2ban"} |~ "Ban |Found |WARNING"',
+    "ssh": '{source="fail2ban"} |~ "Found |Ban "',
     "oom": '{job="vector"} |~ "(?i)killed process|out of memory"',
     "synology auth": '{source="syslog", host=~"vault44|Alpha60"} |~ "(?i)login|auth|user"',
     "udr": '{source="syslog", host="Oumuamua"}',
     "authelia": '{source="docker"} |= "authelia"',
+    "scraping": '{source="docker"} |= "monitoring-prometheus" |~ "scrape|target"',
+    "prometheus": '{source="docker"} |= "monitoring-prometheus" |~ "scrape|target|error"',
+    "10.0.0.44": '{source="syslog", host="vault44"}',
+    "vault44": '{source="syslog", host="vault44"}',
+    "tmdb": '{source="docker"} |~ "(?i)arr-sonarr|arr-radarr" |~ "(?i)TMDB|tmdb|metadata"',
+    "sonarr": '{source="docker"} |= "arr-sonarr"',
+    "radarr": '{source="docker"} |= "arr-radarr"',
+    "prowlarr": '{source="docker"} |= "arr-prowlarr"',
+    "520": '{source="docker"} |= "arr-prowlarr" |~ "520|indexer"',
+    "429": '{source="docker"} |= "arr-prowlarr" |~ "429|rate"',
 }
 
 

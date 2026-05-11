@@ -1,5 +1,7 @@
 .env
 CLAUDE.md
+CODE_INDEX.md
+CONVENTION.md
 __pycache__/
 *.pyc
 .pytest_cache/

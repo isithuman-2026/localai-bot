@@ -2,6 +2,7 @@ services:
   localai-jarvis:
     build: .
     container_name: localai-jarvis
+    hostname: localai-jarvis
     restart: unless-stopped
     userns_mode: "host"
     env_file: .env
@@ -10,8 +11,9 @@ services:
       - LOKI_URL=http://monitoring-loki:3100
       - CHROMA_PATH=/data/chroma
     volumes:
-      - /opt/obsidian-vault:/vault:ro
+      - /opt/obsidian-vault:/vault:rw
       - chroma_data:/data/chroma
+      - /opt/localai-bot/data:/app/data
     networks:
       - ai-agent-net
 

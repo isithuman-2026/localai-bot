@@ -14,7 +14,7 @@ from fastembed import TextEmbedding
 
 VAULT_PATH = Path(os.environ.get("VAULT_PATH", "/vault"))
 CHROMA_PATH = os.environ.get("CHROMA_PATH", "/chroma_data")
-MAX_NOTE_CHARS = 800
+MAX_NOTE_CHARS = 2500
 MAX_NOTES = 3
 BASE_NOTE = "TheLab/jarvis-triage-base.md"
 BASE_NOTE_MAX_CHARS = 3000
@@ -92,6 +92,26 @@ def _build_collection() -> chromadb.Collection | None:
 
 
 _collection = _build_collection()
+
+
+def update_note(relative_path: str, content: str) -> bool:
+    """
+    Write or overwrite a note in the vault (TheLab/ only for safety).
+    Rebuilds the ChromaDB collection after writing.
+    Returns True on success.
+    """
+    if not relative_path.startswith("TheLab/"):
+        return False
+    target = VAULT_PATH / relative_path
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    except OSError:
+        return False
+    # Rebuild collection so new/updated content is searchable immediately
+    global _collection
+    _collection = _build_collection()
+    return True
 
 
 def search(alert_text: str) -> str:

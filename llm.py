@@ -9,13 +9,13 @@ LITELLM_URL = os.environ.get(
 MODEL = "qwen2.5-14b"
 
 
-async def chat(messages: list[dict]) -> str:
+async def chat(messages: list[dict], max_tokens: int = 800) -> str:
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             LITELLM_URL,
-            json={"model": MODEL, "messages": messages},
+            json={"model": MODEL, "messages": messages, "max_tokens": max_tokens},
             headers={"Authorization": "Bearer dummy"},
-            timeout=60.0,
+            timeout=180.0,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
@@ -29,9 +29,10 @@ async def chat_json(messages: list[dict]) -> dict:
                 "model": MODEL,
                 "messages": messages,
                 "response_format": {"type": "json_object"},
+                "max_tokens": 600,
             },
             headers={"Authorization": "Bearer dummy"},
-            timeout=90.0,
+            timeout=120.0,
         )
         resp.raise_for_status()
         return json.loads(resp.json()["choices"][0]["message"]["content"])
