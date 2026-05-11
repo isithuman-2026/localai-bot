@@ -14,10 +14,12 @@ ALERTS_CHANNEL_ID = int(os.environ.get("ALERTS_CHANNEL_ID", "1488857934061633697
 
 HOMELAB_CONTEXT = """
 IMPORTANT CONSTRAINTS — always follow regardless of other context:
-- Oumuamua (UDR) is a hardware router — NEVER suggest "docker logs" for UDR events.
+- Oumuamua (UDR) is a hardware router — NEVER suggest "docker logs" for UDR events. UDR processes (mcad, uled-ctrl, ubios-udapi-server, mca-ctrl) run on the router itself, not on node1. To investigate UDR logs, SSH directly to the UDR (ssh admin@<UDR-IP>), not to node1.
+- mcad calling uled-ctrl with "fw idle" is normal UniFi OS LED power management. Do NOT treat this as suspicious or suggest it is an attack.
 - vault44 and Alpha60 are Synology NAS hardware — NEVER suggest "docker logs" for them.
-- Loki is only reachable inside the Docker network — NEVER suggest curl to Loki. Use Grafana Explore instead.
+- Loki is only reachable inside the Docker network — NEVER suggest curl to Loki and NEVER use grafana-cli to query logs. Use Grafana Explore in the browser instead.
 - The user is on their workstation, not on node1. Always prefix node1 shell commands with: ssh boss@node1
+- MAC addresses with the locally-administered bit set (second bit of first octet: prefixes like 6e:, da:, 2e:, 4e:, ce:, etc.) are iOS/Android privacy/randomized MACs — they are NOT unknown attacker devices. WiFi deauth events for these are normal. Deauth reason code 8 = station leaving BSS normally.
 
 """
 
@@ -92,8 +94,8 @@ _NOTHING_NOTABLE_RE = re.compile(r"🔴\s*NOTHING_NOTABLE.*?(?=🟡|🔴|$)", re
 
 
 def _is_empty_alert(content: str) -> bool:
-    text = re.sub(r"\[[\w\s|]+\|\s*review\]\s*\d{1,2}:\d{2}\s*(?:UTC)?", "", content)
-    text = re.sub(r"🟡\s*severity:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\*{0,2}\[[\w\s|]+\|\s*(?:review|infra|udr)\]\*{0,2}\s*\d{1,2}:\d{2}\s*(?:UTC)?", "", content, flags=re.IGNORECASE)
+    text = re.sub(r"[🟡🔴]\s*severity:\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"🔴\s*NOTHING_NOTABLE.*", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     return len(text) < 20
@@ -224,19 +226,20 @@ class AlertsCog(commands.Cog):
             await message.reply(f"Vault updated: `{path}`" if ok else f"Failed to write `{path}` (TheLab/ only, check path).")
             return
 
-        vault_ctx = vault.search(user_text)
-        loki_ctx = await lokiquery.fetch_context(user_text, user_text)
-        mem_facts = memory.search_facts(user_text)
-        system = ASK_PROMPT + (f"\n\n{vault_ctx}" if vault_ctx else "")
-        if mem_facts:
-            facts_text = "\n".join(f"- [{r['topic']}] {r['content']}" for r in mem_facts)
-            system += f"\n\nKnown facts from memory:\n{facts_text}"
-        user_content = user_text + (f"\n\n{loki_ctx}" if loki_ctx else "")
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content},
-        ]
-        answer = await llm.chat(messages)
+        async with message.channel.typing():
+            vault_ctx = vault.search(user_text)
+            loki_ctx = await lokiquery.fetch_context(user_text, user_text)
+            mem_facts = memory.search_facts(user_text)
+            system = ASK_PROMPT + (f"\n\n{vault_ctx}" if vault_ctx else "")
+            if mem_facts:
+                facts_text = "\n".join(f"- [{r['topic']}] {r['content']}" for r in mem_facts)
+                system += f"\n\nKnown facts from memory:\n{facts_text}"
+            user_content = user_text + (f"\n\n{loki_ctx}" if loki_ctx else "")
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ]
+            answer = await llm.chat(messages)
         await message.reply(answer[:1990])
 
     async def _triage(self, message: discord.Message) -> None:
@@ -295,38 +298,39 @@ class AlertsCog(commands.Cog):
         label_match = re.search(r"\[([^\]]+)\]", content)
         alert_label = label_match.group(1) if label_match else ""
 
-        loki_ctx = await lokiquery.fetch_context(alert_label, content)
-        vault_ctx = vault.search(content)
-        mem_facts = memory.search_facts(content)
+        async with message.channel.typing():
+            loki_ctx = await lokiquery.fetch_context(alert_label, content)
+            vault_ctx = vault.search(content)
+            mem_facts = memory.search_facts(content)
 
-        if vault_ctx:
-            system_prompt += f"\n\n{vault_ctx}"
-        if mem_facts:
-            facts_text = "\n".join(f"- [{r['topic']}] {r['content']}" for r in mem_facts)
-            system_prompt += f"\n\nKnown facts from memory:\n{facts_text}"
+            if vault_ctx:
+                system_prompt += f"\n\n{vault_ctx}"
+            if mem_facts:
+                facts_text = "\n".join(f"- [{r['topic']}] {r['content']}" for r in mem_facts)
+                system_prompt += f"\n\nKnown facts from memory:\n{facts_text}"
 
-        user_content = f"Alert: {content}"
-        if loki_ctx:
-            user_content += f"\n\n{loki_ctx}"
-        if vuln_context:
-            user_content += f"\n\n{vuln_context}"
+            user_content = f"Alert: {content}"
+            if loki_ctx:
+                user_content += f"\n\n{loki_ctx}"
+            if vuln_context:
+                user_content += f"\n\n{vuln_context}"
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ]
 
-        try:
-            result = await llm.chat_json(messages)
-        except Exception:
-            answer = await llm.chat(messages)
-            await message.reply(answer[:1990])
-            memory.log_observation(event=content[:200], summary=answer[:500], host=alert_label)
-            return
+            try:
+                result = await llm.chat_json(messages)
+            except Exception:
+                answer = await llm.chat(messages)
+                await message.reply(answer[:1990])
+                memory.log_observation(event=content[:200], summary=answer[:500], host=alert_label)
+                return
 
-        # Verification pass: second LLM call when confidence is low and logs are available
-        if result.get("confidence", 1.0) < 0.6 and loki_ctx:
-            result = await self._verification_pass(result, loki_ctx, content)
+            # Verification pass: second LLM call when confidence is low and logs are available
+            if result.get("confidence", 1.0) < 0.6 and loki_ctx:
+                result = await self._verification_pass(result, loki_ctx, content)
 
         if result.get("suppress"):
             memory.add_suppression(fp, reason=result.get("cause", "LLM-flagged noise"), expires=0)
