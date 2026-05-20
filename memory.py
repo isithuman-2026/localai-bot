@@ -107,8 +107,9 @@ def write_fact(topic: str, content: str, source: str = "") -> int:
 
 def _fts_query(text: str) -> str:
     import re
-    words = re.findall(r"[a-zA-Z0-9]{3,}", text)
-    return " ".join(words[:20])
+    _STOP = {"the", "and", "for", "that", "this", "with", "have", "which", "what", "from", "are", "our"}
+    words = [w for w in re.findall(r"[a-zA-Z0-9]{3,}", text) if w.lower() not in _STOP]
+    return " OR ".join(words[:20])
 
 
 def search_facts(query: str, limit: int = 5) -> list[dict]:

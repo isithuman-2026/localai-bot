@@ -101,6 +101,13 @@ def _is_empty_alert(content: str) -> bool:
     return len(text) < 20
 
 
+_INFRA_CONTAINERS = {"traefik", "socket-proxy", "socket_proxy", "authelia", "infra-traefik"}
+
+def _is_infra_alert(content: str) -> bool:
+    lower = content.lower()
+    return any(c in lower for c in _INFRA_CONTAINERS)
+
+
 def _fingerprint(content: str) -> str:
     parts = []
     ips = re.findall(r"\b10\.\d+\.\d+\.\d+\b", content)
@@ -259,7 +266,7 @@ class AlertsCog(commands.Cog):
 
         fp = _fingerprint(content)
         auto_sup, auto_reason = memory.check_auto_suppress(fp)
-        if auto_sup:
+        if auto_sup and not _is_infra_alert(content):
             await message.reply(f"Auto-suppressed: {auto_reason}")
             return
 
