@@ -103,22 +103,40 @@ def _is_empty_alert(content: str) -> bool:
 
 _INFRA_CONTAINERS = {"traefik", "socket-proxy", "socket_proxy", "authelia", "infra-traefik"}
 
+_SECURITY_KEYWORDS = {
+    "honeypot", "brute force", "bruteforce", "fail2ban", "banned", "blocked",
+    "ssh auth", "failed to log in", "failed to sign in", "authorization failure",
+    "account protection", "intrusion", "ids", "ips", "threat", "port scan",
+    "honeypot triggered", "ssh brute", "dsm login",
+}
+
 def _is_infra_alert(content: str) -> bool:
     lower = content.lower()
     return any(c in lower for c in _INFRA_CONTAINERS)
+
+
+def _is_security_alert(content: str) -> bool:
+    lower = content.lower()
+    return any(kw in lower for kw in _SECURITY_KEYWORDS)
 
 
 def _fingerprint(content: str) -> str:
     parts = []
     ips = re.findall(r"\b10\.\d+\.\d+\.\d+\b", content)
     parts.extend(ips[:2])
-    for kw in ("timeout", "scraping", "tmdb", "oom", "container down", "fail2ban", "eth4", "520", "429"):
+    for kw in (
+        "timeout", "scraping", "tmdb", "oom", "container down", "fail2ban", "eth4", "520", "429",
+        "honeypot", "ssh auth", "failed to log in", "failed to sign in", "account protection",
+        "brute force", "banned", "blocked", "authorization failure",
+    ):
         if kw in content.lower():
             parts.append(kw)
     if re.search(r"\[udr\s*\|", content, re.IGNORECASE):
         parts.append("udr")
     elif re.search(r"\[node1\s*\|", content, re.IGNORECASE):
         parts.append("node1")
+    elif re.search(r"\[alpha60\s*\|", content, re.IGNORECASE):
+        parts.append("alpha60")
     key = ":".join(sorted(set(p.lower() for p in parts))) or "generic"
     return hashlib.md5(key.encode()).hexdigest()[:10]
 
@@ -266,7 +284,7 @@ class AlertsCog(commands.Cog):
 
         fp = _fingerprint(content)
         auto_sup, auto_reason = memory.check_auto_suppress(fp)
-        if auto_sup and not _is_infra_alert(content):
+        if auto_sup and not _is_infra_alert(content) and not _is_security_alert(content):
             await message.reply(f"Auto-suppressed: {auto_reason}")
             return
 
