@@ -12,8 +12,19 @@ import chromadb
 from chromadb.utils.embedding_functions import EmbeddingFunction
 from fastembed import TextEmbedding
 
-VAULT_PATH = Path(os.environ.get("VAULT_PATH", "/vault"))
-CHROMA_PATH = os.environ.get("CHROMA_PATH", "/chroma_data")
+
+def _safe_env_path(env_var: str, default: str) -> Path:
+    raw = os.environ.get(env_var, default)
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError(f"{env_var} must be an absolute path, got {raw!r}")
+    if ".." in candidate.parts:
+        raise ValueError(f"{env_var} must not contain '..', got {raw!r}")
+    return candidate.resolve()
+
+
+VAULT_PATH = _safe_env_path("VAULT_PATH", "/vault")
+CHROMA_PATH = str(_safe_env_path("CHROMA_PATH", "/chroma_data"))
 MAX_NOTE_CHARS = 2500
 MAX_NOTES = 3
 BASE_NOTE = "TheLab/jarvis-triage-base.md"
@@ -44,8 +55,8 @@ def _clean(text: str) -> str:
 
 
 def _load_base() -> str:
-    base_path = VAULT_PATH / BASE_NOTE
-    if not base_path.exists():
+    base_path = (VAULT_PATH / BASE_NOTE).resolve()
+    if not base_path.is_relative_to(VAULT_PATH) or not base_path.exists():
         return ""
     try:
         return _clean(base_path.read_text(errors="ignore"))[:BASE_NOTE_MAX_CHARS]
@@ -69,8 +80,8 @@ def _build_collection() -> chromadb.Collection | None:
     docs, ids, metas = [], [], []
 
     for dir_name in SEARCH_DIRS:
-        search_dir = VAULT_PATH / dir_name
-        if not search_dir.exists():
+        search_dir = (VAULT_PATH / dir_name).resolve()
+        if not search_dir.is_relative_to(VAULT_PATH) or not search_dir.exists():
             continue
         for md in search_dir.rglob("*.md"):
             if md == base_path:
@@ -102,7 +113,11 @@ def update_note(relative_path: str, content: str) -> bool:
     """
     if not relative_path.startswith("TheLab/"):
         return False
-    target = VAULT_PATH / relative_path
+    if ".." in Path(relative_path).parts:
+        return False
+    target = (VAULT_PATH / relative_path).resolve()
+    if not target.is_relative_to(VAULT_PATH):
+        return False
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")

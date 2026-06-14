@@ -138,7 +138,7 @@ def _fingerprint(content: str) -> str:
     elif re.search(r"\[alpha60\s*\|", content, re.IGNORECASE):
         parts.append("alpha60")
     key = ":".join(sorted(set(p.lower() for p in parts))) or "generic"
-    return hashlib.md5(key.encode()).hexdigest()[:10]
+    return hashlib.sha256(key.encode()).hexdigest()[:10]
 
 
 def _format_triage_reply(result: dict, history: dict | None = None) -> str:
