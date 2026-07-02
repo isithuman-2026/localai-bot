@@ -1,0 +1,278 @@
+# Snyk (https://snyk.io) policy file
+# Ignores OS-level Debian 13 container vulns with no upstream fix and no known exploit.
+# apt-get upgrade in Dockerfile will auto-apply patches when Debian releases them.
+version: v1.25.0
+ignore:
+  # chromadb (CVE-2026-45829..45833): no fixed version in any release as of 2026-07-02.
+  # All five target Chroma's server API (auth bypass, deserialization). This bot uses
+  # in-process EphemeralClient only; no Chroma server runs or is exposed. Revisit when
+  # a fixed release ships.
+  SNYK-PYTHON-CHROMADB-16758047:
+    - '*':
+        reason: Server-API vuln; bot uses in-process EphemeralClient, no server exposed. No fixed version available.
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-PYTHON-CHROMADB-17337041:
+    - '*':
+        reason: Server-API vuln; bot uses in-process EphemeralClient, no server exposed. No fixed version available.
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-PYTHON-CHROMADB-17337044:
+    - '*':
+        reason: Server-API vuln; bot uses in-process EphemeralClient, no server exposed. No fixed version available.
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-PYTHON-CHROMADB-17337045:
+    - '*':
+        reason: Server-API vuln; bot uses in-process EphemeralClient, no server exposed. No fixed version available.
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-PYTHON-CHROMADB-17337048:
+    - '*':
+        reason: Server-API vuln; bot uses in-process EphemeralClient, no server exposed. No fixed version available.
+        expires: '2027-01-01T00:00:00.000Z'
+  # acl
+  SNYK-DEBIAN13-ACL-17677866:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-ACL-17677882:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # apt
+  SNYK-DEBIAN13-APT-5675173:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # attr
+  SNYK-DEBIAN13-ATTR-17678182:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # bzip2
+  SNYK-DEBIAN13-BZIP2-17099839:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # coreutils
+  SNYK-DEBIAN13-COREUTILS-10259260:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-COREUTILS-5673914:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # glibc
+  SNYK-DEBIAN13-GLIBC-16115568:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-16115576:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-16325153:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-16325161:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-5680884:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-5681058:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-5681145:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-5681177:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-5681215:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-5681241:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GLIBC-5681256:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # gzip
+  SNYK-DEBIAN13-GZIP-17681782:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-GZIP-17681798:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # ncurses
+  SNYK-DEBIAN13-NCURSES-10378958:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-NCURSES-15762838:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # pam
+  SNYK-DEBIAN13-PAM-17339897:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # perl
+  SNYK-DEBIAN13-PERL-16896261:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-17037371:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-17037374:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-17037434:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-17079056:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-17082609:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-17082630:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-17082645:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-17167993:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-17345867:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-PERL-5692251:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # shadow
+  SNYK-DEBIAN13-SHADOW-5695385:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-SHADOW-8551157:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # sqlite3
+  SNYK-DEBIAN13-SQLITE3-15682562:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-SQLITE3-17334397:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-SQLITE3-17334400:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-SQLITE3-5696112:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # systemd
+  SNYK-DEBIAN13-SYSTEMD-16009572:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-SYSTEMD-5696564:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-SYSTEMD-5733389:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-SYSTEMD-5733399:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-SYSTEMD-5733401:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # tar
+  SNYK-DEBIAN13-TAR-15962848:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-TAR-5696683:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # utillinux
+  SNYK-DEBIAN13-UTILLINUX-14200590:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-UTILLINUX-15358019:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-UTILLINUX-15922814:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-UTILLINUX-17366408:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-UTILLINUX-17366422:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-UTILLINUX-17366433:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-UTILLINUX-17366434:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-UTILLINUX-17690419:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  SNYK-DEBIAN13-UTILLINUX-5698535:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # xzutils
+  SNYK-DEBIAN13-XZUTILS-15897593:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
+  # zlib
+  SNYK-DEBIAN13-ZLIB-15307854:
+    - '*':
+        reason: No upstream fix in Debian 13; no known exploit
+        expires: '2027-01-01T00:00:00.000Z'
