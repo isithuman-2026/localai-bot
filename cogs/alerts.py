@@ -6,7 +6,6 @@ import discord
 from discord.ext import commands
 import llm
 import lokiquery
-import vulnlookup
 import vault
 import memory
 
@@ -41,18 +40,6 @@ TRIAGE_PROMPT_JSON = (
     "- commands: max 3, copy-pasteable, prefix node1 commands with 'ssh boss@node1'\n"
     "- suppress: true only if this is known persistent noise with no action needed\n"
     "- No preamble. No explanation. JSON only."
-)
-
-TRIAGE_PROMPT_VULN_JSON = (
-    "You are a homelab security assistant. You have full knowledge of this homelab's topology and services.\n\n"
-    + HOMELAB_CONTEXT
-    + "\nSecurity packages were just auto-installed on node1. Vuln context is provided below the alert.\n"
-    "Respond ONLY with a JSON object matching this exact schema:\n"
-    '{"severity":"critical|high|medium|low","cause":"most critical CVE or issue in one sentence","confidence":0.0,'
-    '"commands":["ssh boss@node1 <exact command>"],"next_step":"one concrete action","suppress":false}\n\n'
-    "Rules:\n"
-    "- commands: exact command to confirm patch is applied\n"
-    "- No preamble. JSON only."
 )
 
 VERIFICATION_PROMPT_JSON = (
@@ -91,6 +78,7 @@ _GRAFANA_RESOLVED_RE = re.compile(r"^\s*\*{0,2}Resolved\*{0,2}\s*$", re.MULTILIN
 _GRAFANA_FIRING_RE = re.compile(r"^\s*Firing\s*$", re.MULTILINE)
 _ALERTNAME_RE = re.compile(r"alertname\s*=\s*(.+)")
 _NOTHING_NOTABLE_RE = re.compile(r"🔴\s*NOTHING_NOTABLE.*?(?=🟡|🔴|$)", re.DOTALL | re.IGNORECASE)
+_ABUSEIPDB_RE = re.compile(r"AbuseIPDB Reporter", re.IGNORECASE)
 
 
 def _is_empty_alert(content: str) -> bool:
@@ -270,6 +258,9 @@ class AlertsCog(commands.Cog):
     async def _triage(self, message: discord.Message) -> None:
         content = message.content
 
+        if _ABUSEIPDB_RE.search(content):
+            return
+
         if _is_empty_alert(content):
             return
 
@@ -309,16 +300,9 @@ class AlertsCog(commands.Cog):
             system_prompt = TRIAGE_PROMPT_HYPOTHESIS
         else:
             system_prompt = TRIAGE_PROMPT_JSON
-        vuln_context = ""
-
         if _UPDATE_RE.search(content):
-            match = _CODE_BLOCK_RE.search(content)
-            if match:
-                packages = match.group(1).split()
-                if packages:
-                    vuln_context = await vulnlookup.enrich_packages(packages)
-                    if vuln_context:
-                        system_prompt = TRIAGE_PROMPT_VULN_JSON
+            await message.reply("Routine security update — no action needed.")
+            return
 
         label_match = re.search(r"\[([^\]]+)\]", content)
         alert_label = label_match.group(1) if label_match else ""
@@ -337,8 +321,6 @@ class AlertsCog(commands.Cog):
             user_content = f"Alert: {content}"
             if loki_ctx:
                 user_content += f"\n\n{loki_ctx}"
-            if vuln_context:
-                user_content += f"\n\n{vuln_context}"
 
             messages = [
                 {"role": "system", "content": system_prompt},

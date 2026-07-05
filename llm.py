@@ -6,7 +6,7 @@ LITELLM_URL = os.environ.get(
     "LITELLM_URL",
     "http://localai-litellm:4000/v1/chat/completions",
 )
-MODEL = "qwen2.5-14b"
+MODEL = "gemma4:e4b"
 
 
 async def chat(messages: list[dict], max_tokens: int = 800) -> str:
