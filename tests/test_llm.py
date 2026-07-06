@@ -23,7 +23,7 @@ async def test_chat_returns_content():
     assert result == "disk full on server01"
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args
-    assert call_kwargs[1]["json"]["model"] == "qwen2.5-14b"
+    assert call_kwargs[1]["json"]["model"] == llm.MODEL
     assert call_kwargs[1]["json"]["messages"] == [{"role": "user", "content": "what happened?"}]
 
 
