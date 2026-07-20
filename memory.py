@@ -65,6 +65,13 @@ CREATE TABLE IF NOT EXISTS alert_history (
     auto_suppressed      INTEGER NOT NULL DEFAULT 0,
     auto_suppress_reason TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS alert_occurrences (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint TEXT NOT NULL,
+    ts          INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_alert_occurrences_fp_ts ON alert_occurrences(fingerprint, ts);
 """
 
 _OBSERVATIONS_MIGRATIONS = [
@@ -214,6 +221,53 @@ def get_alert_history(fingerprint: str) -> dict | None:
     return dict(row) if row else None
 
 
+def record_occurrence(fingerprint: str) -> None:
+    """Log a timestamped occurrence of this fingerprint, for rate-based re-escalation."""
+    now = int(time.time())
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO alert_occurrences (fingerprint, ts) VALUES (?, ?)",
+            (fingerprint, now),
+        )
+        conn.execute(
+            "DELETE FROM alert_occurrences WHERE ts < ?",
+            (now - 30 * 86400,),
+        )
+
+
+def get_occurrence_rate(fingerprint: str, window_secs: int = 7 * 86400) -> dict:
+    now = int(time.time())
+    with _connect() as conn:
+        recent = conn.execute(
+            "SELECT COUNT(*) FROM alert_occurrences WHERE fingerprint = ? AND ts > ?",
+            (fingerprint, now - window_secs),
+        ).fetchone()[0]
+        prior = conn.execute(
+            "SELECT COUNT(*) FROM alert_occurrences WHERE fingerprint = ? AND ts <= ? AND ts > ?",
+            (fingerprint, now - window_secs, now - 2 * window_secs),
+        ).fetchone()[0]
+    return {"recent": recent, "prior": prior}
+
+
+def check_rate_escalation(
+    fingerprint: str,
+    window_secs: int = 7 * 86400,
+    multiplier: float = 2.0,
+    min_recent: int = 3,
+) -> tuple[bool, str]:
+    """True if an already-suppressed pattern's occurrence rate has grown enough to warrant re-surfacing it."""
+    rates = get_occurrence_rate(fingerprint, window_secs)
+    recent, prior = rates["recent"], rates["prior"]
+    window_days = window_secs // 86400
+    if recent < min_recent:
+        return False, ""
+    if prior == 0:
+        return True, f"rate increasing: {recent} occurrences in last {window_days}d vs 0 in prior {window_days}d"
+    if recent >= prior * multiplier:
+        return True, f"rate increasing: {recent} occurrences in last {window_days}d vs {prior} in prior {window_days}d"
+    return False, ""
+
+
 def check_auto_suppress(
     fingerprint: str,
     min_occurrences: int = 5,
@@ -223,6 +277,10 @@ def check_auto_suppress(
     if not history:
         return False, ""
     if history["auto_suppressed"]:
+        escalate, reason = check_rate_escalation(fingerprint)
+        if escalate:
+            _clear_auto_suppress(fingerprint)
+            return False, f"re-escalated: {reason}"
         return True, history["auto_suppress_reason"]
     if (
         history["occurrence_count"] >= min_occurrences
@@ -243,4 +301,12 @@ def _mark_auto_suppressed(fingerprint: str, reason: str) -> None:
         conn.execute(
             "UPDATE alert_history SET auto_suppressed = 1, auto_suppress_reason = ? WHERE fingerprint = ?",
             (reason, fingerprint),
+        )
+
+
+def _clear_auto_suppress(fingerprint: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE alert_history SET auto_suppressed = 0, auto_suppress_reason = '' WHERE fingerprint = ?",
+            (fingerprint,),
         )

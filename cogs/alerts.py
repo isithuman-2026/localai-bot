@@ -274,7 +274,11 @@ class AlertsCog(commands.Cog):
             return
 
         fp = _fingerprint(content)
+        memory.record_occurrence(fp)
         auto_sup, auto_reason = memory.check_auto_suppress(fp)
+        re_escalated_note = ""
+        if not auto_sup and auto_reason.startswith("re-escalated"):
+            re_escalated_note = f"⚠️ Previously auto-suppressed, but {auto_reason}\n\n"
         if auto_sup and not _is_infra_alert(content) and not _is_security_alert(content):
             await message.reply(f"Auto-suppressed: {auto_reason}")
             return
@@ -359,7 +363,7 @@ class AlertsCog(commands.Cog):
             severity=result.get("severity", ""),
         )
 
-        reply = _format_triage_reply(result, history)
+        reply = re_escalated_note + _format_triage_reply(result, history)
         await message.reply(reply[:1990])
 
         memory.log_observation(
