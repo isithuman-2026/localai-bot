@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 import llm
 import memory
+import sysstats
 
 ALERTS_CHANNEL_ID = int(os.environ.get("ALERTS_CHANNEL_ID", "1488857934061633697"))
 
@@ -53,9 +54,11 @@ class ChatCog(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
-        if self.bot.user not in message.mentions:
+        is_dm = message.guild is None
+        mentioned = self.bot.user in message.mentions
+        if not mentioned and not is_dm:
             return
-        if message.channel.id == ALERTS_CHANNEL_ID:
+        if message.channel.id == ALERTS_CHANNEL_ID and not mentioned:
             return
         content = message.content
         for fmt in (f"<@{self.bot.user.id}>", f"<@!{self.bot.user.id}>"):
@@ -75,6 +78,10 @@ class ChatCog(commands.Cog):
         if facts:
             facts_block = "\n".join(f"- [{f['topic']}] {f['content']}" for f in facts)
             system_parts.append(f"Relevant homelab facts (treat as ground truth):\n{facts_block}")
+        if sysstats.looks_like_sitrep_request(user_text):
+            snapshot = await sysstats.gather_sitrep()
+            if snapshot:
+                system_parts.append(snapshot + sysstats.SITREP_ADDENDUM)
         system_content = "\n\n".join(system_parts)
         messages = [{"role": "system", "content": system_content}] + history + [
             {"role": "user", "content": user_text}

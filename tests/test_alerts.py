@@ -6,7 +6,7 @@ import os
 
 os.environ.setdefault("ALERTS_CHANNEL_ID", "1488857934061633697")
 
-from cogs.alerts import AlertsCog, TRIAGE_PROMPT_JSON, ASK_PROMPT, _format_triage_reply, VERIFICATION_PROMPT_JSON, TRIAGE_PROMPT_HYPOTHESIS
+from cogs.alerts import AlertsCog, DISCLAUDE_BOT_ID, TRIAGE_PROMPT_JSON, ASK_PROMPT, _format_triage_reply, VERIFICATION_PROMPT_JSON, TRIAGE_PROMPT_HYPOTHESIS
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +83,19 @@ async def test_auto_triage_calls_chat_json():
         assert call_messages[0]["role"] == "system"
         assert call_messages[0]["content"] == TRIAGE_PROMPT_JSON
         msg.reply.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_ignores_disclaude_own_posts():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True, content="Fixed the reply gate bug, redeploying now.")
+    msg.author.id = DISCLAUDE_BOT_ID
+
+    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock) as mock_json:
+        await cog.on_message(msg)
+        mock_json.assert_not_called()
+        msg.reply.assert_not_called()
 
 
 @pytest.mark.asyncio

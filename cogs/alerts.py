@@ -8,8 +8,10 @@ import llm
 import lokiquery
 import vault
 import memory
+import sysstats
 
 ALERTS_CHANNEL_ID = int(os.environ.get("ALERTS_CHANNEL_ID", "1488857934061633697"))
+DISCLAUDE_BOT_ID = int(os.environ.get("DISCLAUDE_BOT_ID", "1495259014014046229"))
 
 HOMELAB_CONTEXT = """
 IMPORTANT CONSTRAINTS — always follow regardless of other context:
@@ -201,7 +203,7 @@ class AlertsCog(commands.Cog):
                 await self._ask(message, content)
             return
 
-        if message.author.bot and message.author.id != self.bot.user.id:
+        if message.author.bot and message.author.id != self.bot.user.id and message.author.id != DISCLAUDE_BOT_ID:
             if message.id in self._seen:
                 return
             self._seen.add(message.id)
@@ -247,6 +249,10 @@ class AlertsCog(commands.Cog):
             if mem_facts:
                 facts_text = "\n".join(f"- [{r['topic']}] {r['content']}" for r in mem_facts)
                 system += f"\n\nKnown facts from memory:\n{facts_text}"
+            if sysstats.looks_like_sitrep_request(user_text):
+                snapshot = await sysstats.gather_sitrep()
+                if snapshot:
+                    system += snapshot + sysstats.SITREP_ADDENDUM
             user_content = user_text + (f"\n\n{loki_ctx}" if loki_ctx else "")
             messages = [
                 {"role": "system", "content": system},
