@@ -1,4 +1,6 @@
+import asyncio
 import hashlib
+import json
 import os
 import re
 import time
@@ -9,6 +11,7 @@ import lokiquery
 import vault
 import memory
 import sysstats
+import checks
 
 ALERTS_CHANNEL_ID = int(os.environ.get("ALERTS_CHANNEL_ID", "1488857934061633697"))
 DISCLAUDE_BOT_ID = int(os.environ.get("DISCLAUDE_BOT_ID", "1495259014014046229"))
@@ -30,10 +33,19 @@ ASK_PROMPT = (
     + "\nBe concise. No preamble. No filler. Commands must be copy-pasteable."
 )
 
+TOOL_AVAILABILITY_NOTE = (
+    "\nYou have read-only diagnostic tools available (docker_inspect, docker_logs, ping, curl_health, "
+    "query_prometheus, query_loki, disk_usage). Use one if it would sharpen your diagnosis — check the "
+    "actual state rather than guessing. Once you're confident, stop calling tools and answer with the JSON "
+    "schema below. Don't use tools for alerts that are already clear from the context provided.\n"
+)
+
 TRIAGE_PROMPT_JSON = (
     "You are a homelab security and ops assistant. You have full knowledge of this homelab's topology and services.\n\n"
     + HOMELAB_CONTEXT
-    + "\nAnalyse the alert. Respond ONLY with a JSON object matching this exact schema:\n"
+    + "\nAnalyse the alert."
+    + TOOL_AVAILABILITY_NOTE
+    + " Respond ONLY with a JSON object matching this exact schema:\n"
     '{"severity":"critical|high|medium|low","cause":"one sentence root cause","confidence":0.0,'
     '"commands":["ssh boss@node1 <exact command>"],"next_step":"one concrete action","suppress":false}\n\n'
     "Rules:\n"
@@ -44,25 +56,12 @@ TRIAGE_PROMPT_JSON = (
     "- No preamble. No explanation. JSON only."
 )
 
-VERIFICATION_PROMPT_JSON = (
-    "You are a homelab ops assistant performing root cause verification.\n\n"
-    + HOMELAB_CONTEXT
-    + "\nYou previously diagnosed an alert. Below is your initial assessment and the actual log evidence.\n"
-    "Re-evaluate and respond ONLY with a JSON object matching this schema:\n"
-    '{"root_cause":"string","confidence":0.0,"evidence":["log line or fact that supports conclusion"],'
-    '"recommended_actions":["ssh boss@node1 <exact command>"],"severity":"critical|high|medium|low"}\n\n'
-    "Rules:\n"
-    "- evidence: cite specific log lines or facts, max 3\n"
-    "- recommended_actions: max 3, copy-pasteable\n"
-    "- confidence: increase if logs support the hypothesis, decrease if contradicted\n"
-    "- No preamble. No explanation. JSON only."
-)
-
 TRIAGE_PROMPT_HYPOTHESIS = (
     "You are a homelab security and ops assistant. You have full knowledge of this homelab's topology and services.\n\n"
     + HOMELAB_CONTEXT
-    + "\nAnalyse the alert. Generate up to 3 hypotheses ordered by confidence descending.\n"
-    "Respond ONLY with a JSON object matching this exact schema:\n"
+    + "\nAnalyse the alert. Generate up to 3 hypotheses ordered by confidence descending."
+    + TOOL_AVAILABILITY_NOTE
+    + " Respond ONLY with a JSON object matching this exact schema:\n"
     '{"severity":"critical|high|medium|low","hypotheses":[{"cause":"string","confidence":0.0,"commands":["ssh boss@node1 <cmd>"]}],'
     '"next_step":"string","suppress":false}\n\n'
     "Rules:\n"
@@ -129,6 +128,30 @@ def _fingerprint(content: str) -> str:
         parts.append("alpha60")
     key = ":".join(sorted(set(p.lower() for p in parts))) or "generic"
     return hashlib.sha256(key.encode()).hexdigest()[:10]
+
+
+def _parse_triage_json(content: str) -> dict:
+    """Parse a JSON verdict object out of a chat_with_tools final answer.
+
+    Unlike chat_json(), chat_with_tools() doesn't force response_format=json_object,
+    so a local model's answer may be wrapped in a ```json fence or preceded by prose.
+    Strip a fence if present, then fall back to slicing the first {...} span.
+    Raises ValueError if the result parses but isn't a JSON object.
+    """
+    text = content.strip()
+    fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        parsed = json.loads(text[start:end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("parsed JSON is not an object")
+    return parsed
 
 
 def _format_triage_reply(result: dict, history: dict | None = None) -> str:
@@ -338,16 +361,12 @@ class AlertsCog(commands.Cog):
             ]
 
             try:
-                result = await llm.chat_json(messages)
+                result = await self._run_tool_loop(system_prompt, user_content)
             except Exception:
                 answer = await llm.chat(messages)
                 await message.reply(answer[:1990])
                 memory.log_observation(event=content[:200], summary=answer[:500], host=alert_label)
                 return
-
-            # Verification pass: second LLM call when confidence is low and logs are available
-            if result.get("confidence", 1.0) < 0.6 and loki_ctx:
-                result = await self._verification_pass(result, loki_ctx, content)
 
         if result.get("suppress"):
             memory.add_suppression(fp, reason=result.get("cause", "LLM-flagged noise"), expires=0)
@@ -382,29 +401,40 @@ class AlertsCog(commands.Cog):
             severity=result.get("severity", ""),
         )
 
-    async def _verification_pass(
-        self,
-        first_result: dict,
-        loki_ctx: str,
-        alert_content: str,
-    ) -> dict:
-        user_content = (
-            f"Initial assessment:\n"
-            f"Cause: {first_result.get('cause', '')}\n"
-            f"Confidence: {first_result.get('confidence', 0.0)}\n\n"
-            f"Log evidence:\n{loki_ctx}\n\n"
-            f"Alert: {alert_content}"
-        )
+    async def _run_tool_loop(self, system_prompt: str, user_content: str) -> dict:
         messages = [
-            {"role": "system", "content": VERIFICATION_PROMPT_JSON},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
-        try:
-            verified = await llm.chat_json(messages)
-            if "severity" not in verified:
-                verified["severity"] = first_result.get("severity", "medium")
-            if "commands" not in verified and "recommended_actions" in verified:
-                verified["commands"] = verified["recommended_actions"]
-            return verified
-        except Exception:
-            return first_result
+        for _ in range(4):
+            response = await llm.chat_with_tools(messages, checks.TOOL_SCHEMA)
+            tool_calls = response.get("tool_calls")
+            if not tool_calls:
+                content = response.get("content") or ""
+                try:
+                    return _parse_triage_json(content)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    return {"severity": "medium", "cause": content[:200], "confidence": 0.3,
+                            "commands": [], "next_step": "manual review", "suppress": False}
+            messages.append({"role": "assistant", "content": None, "tool_calls": tool_calls})
+            for call in tool_calls:
+                call_id = call.get("id", "")
+                try:
+                    fn_name = call["function"]["name"]
+                    fn_args = call["function"]["arguments"]
+                    fn_args = fn_args if isinstance(fn_args, dict) else json.loads(fn_args)
+                    print(f"[triage] tool call: {fn_name}({fn_args})", flush=True)
+                    tool_result = await asyncio.to_thread(checks.dispatch, fn_name, fn_args)
+                except (json.JSONDecodeError, TypeError, KeyError) as e:
+                    tool_result = {"error": f"invalid arguments: {e}"}
+                messages.append({
+                    "role": "tool", "tool_call_id": call_id,
+                    "content": json.dumps(tool_result)[:4000],
+                })
+        # Round 4 exhausted with no verdict — force a final answer, no tool access
+        print("[triage] round cap reached, forcing final answer", flush=True)
+        forced = await llm.chat_json(messages)
+        if not isinstance(forced, dict):
+            return {"severity": "medium", "cause": str(forced)[:200], "confidence": 0.3,
+                    "commands": [], "next_step": "manual review", "suppress": False}
+        return forced

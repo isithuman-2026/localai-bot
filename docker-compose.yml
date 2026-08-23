@@ -11,6 +11,7 @@ services:
       - LOKI_URL=http://monitoring-loki:3100
       - PROMETHEUS_URL=http://monitoring-prometheus:9090
       - CHROMA_PATH=/data/chroma
+      - DOCKER_HOST=tcp://socket-proxy:2375
     volumes:
       - /opt/obsidian-vault:/vault:rw
       - chroma_data:/data/chroma
