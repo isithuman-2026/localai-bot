@@ -125,3 +125,29 @@ def test_disk_usage_allows_root():
         result = checks.disk_usage("/")
     assert result["total"] == 1000
     assert result["used"] == 500
+
+
+def test_dispatch_calls_known_tool():
+    mock_fn = MagicMock(return_value={"status": "running"})
+    with patch.dict(checks._DISPATCH_TABLE, {"docker_inspect": mock_fn}):
+        result = checks.dispatch("docker_inspect", {"container": "homelab-vector"})
+    mock_fn.assert_called_once_with(container="homelab-vector")
+    assert result == {"status": "running"}
+
+
+def test_dispatch_returns_error_for_unknown_tool():
+    result = checks.dispatch("delete_everything", {})
+    assert "error" in result
+
+
+def test_dispatch_catches_exceptions():
+    mock_fn = MagicMock(side_effect=RuntimeError("boom"))
+    with patch.dict(checks._DISPATCH_TABLE, {"docker_inspect": mock_fn}):
+        result = checks.dispatch("docker_inspect", {"container": "x"})
+    assert "error" in result
+    assert "boom" in result["error"]
+
+
+def test_tool_schema_names_match_dispatch_table():
+    schema_names = {t["function"]["name"] for t in checks.TOOL_SCHEMA}
+    assert schema_names == set(checks._DISPATCH_TABLE.keys())

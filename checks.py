@@ -126,3 +126,67 @@ def disk_usage(path: str) -> dict:
         return {"error": f"path not in allowlist: {path!r}"}
     total, used, free = shutil.disk_usage(str(resolved))
     return {"total": total, "used": used, "free": free}
+
+
+_DISPATCH_TABLE = {
+    "docker_inspect": docker_inspect,
+    "docker_logs": docker_logs,
+    "ping": ping,
+    "curl_health": curl_health,
+    "query_prometheus": query_prometheus,
+    "query_loki": query_loki,
+    "disk_usage": disk_usage,
+}
+
+
+def dispatch(name: str, arguments: dict) -> dict:
+    fn = _DISPATCH_TABLE.get(name)
+    if fn is None:
+        return {"error": f"unknown tool: {name!r}"}
+    try:
+        result = fn(**arguments)
+        return result if isinstance(result, dict) else {"result": result}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+TOOL_SCHEMA = [
+    {"type": "function", "function": {
+        "name": "docker_inspect",
+        "description": "Get status, restart count, and exit code for a known Docker container.",
+        "parameters": {"type": "object", "properties": {"container": {"type": "string"}}, "required": ["container"]},
+    }},
+    {"type": "function", "function": {
+        "name": "docker_logs",
+        "description": "Get recent logs (last N minutes, max 60) for a known Docker container.",
+        "parameters": {"type": "object", "properties": {
+            "container": {"type": "string"},
+            "since_minutes": {"type": "integer"},
+        }, "required": ["container"]},
+    }},
+    {"type": "function", "function": {
+        "name": "ping",
+        "description": "Check reachability and latency of a known homelab host (node1, NAS, UDR, AdGuard).",
+        "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"]},
+    }},
+    {"type": "function", "function": {
+        "name": "curl_health",
+        "description": "Check the HTTP status of a known internal health endpoint.",
+        "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+    }},
+    {"type": "function", "function": {
+        "name": "query_prometheus",
+        "description": "Run a PromQL query against the homelab's Prometheus.",
+        "parameters": {"type": "object", "properties": {"promql": {"type": "string"}}, "required": ["promql"]},
+    }},
+    {"type": "function", "function": {
+        "name": "query_loki",
+        "description": "Run a LogQL query against the homelab's Loki.",
+        "parameters": {"type": "object", "properties": {"logql": {"type": "string"}}, "required": ["logql"]},
+    }},
+    {"type": "function", "function": {
+        "name": "disk_usage",
+        "description": "Get total/used/free disk usage for a known path (/, /opt, /var/log, /home/boss).",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    }},
+]
