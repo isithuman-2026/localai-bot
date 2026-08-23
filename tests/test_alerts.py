@@ -1,3 +1,4 @@
+import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from discord.ext import commands
@@ -6,7 +7,7 @@ import os
 
 os.environ.setdefault("ALERTS_CHANNEL_ID", "1488857934061633697")
 
-from cogs.alerts import AlertsCog, DISCLAUDE_BOT_ID, TRIAGE_PROMPT_JSON, ASK_PROMPT, _format_triage_reply, VERIFICATION_PROMPT_JSON, TRIAGE_PROMPT_HYPOTHESIS
+from cogs.alerts import AlertsCog, DISCLAUDE_BOT_ID, TRIAGE_PROMPT_JSON, ASK_PROMPT, _format_triage_reply, TRIAGE_PROMPT_HYPOTHESIS
 
 
 @pytest.fixture(autouse=True)
@@ -68,18 +69,24 @@ FAKE_TRIAGE_RESULT = {
 }
 
 
+def _tool_response(result_dict):
+    """A no-tool-call chat_with_tools response carrying the final JSON verdict."""
+    return {"role": "assistant", "content": json.dumps(result_dict), "tool_calls": None}
+
+
 @pytest.mark.asyncio
-async def test_auto_triage_calls_chat_json():
+async def test_auto_triage_calls_chat_with_tools():
     bot = make_bot()
     cog = AlertsCog(bot)
     msg = make_alert_message(bot_authored=True)
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_TRIAGE_RESULT) as mock_json, \
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_TRIAGE_RESULT)) as mock_tools, \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""):
         await cog.on_message(msg)
-        mock_json.assert_called_once()
-        call_messages = mock_json.call_args[0][0]
+        mock_tools.assert_called_once()
+        call_messages = mock_tools.call_args[0][0]
         assert call_messages[0]["role"] == "system"
         assert call_messages[0]["content"] == TRIAGE_PROMPT_JSON
         msg.reply.assert_called_once()
@@ -92,9 +99,9 @@ async def test_ignores_disclaude_own_posts():
     msg = make_alert_message(bot_authored=True, content="Fixed the reply gate bug, redeploying now.")
     msg.author.id = DISCLAUDE_BOT_ID
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock) as mock_json:
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock) as mock_tools:
         await cog.on_message(msg)
-        mock_json.assert_not_called()
+        mock_tools.assert_not_called()
         msg.reply.assert_not_called()
 
 
@@ -104,7 +111,8 @@ async def test_auto_triage_reply_contains_severity_and_cause():
     cog = AlertsCog(bot)
     msg = make_alert_message(bot_authored=True)
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_TRIAGE_RESULT), \
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_TRIAGE_RESULT)), \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""):
         await cog.on_message(msg)
@@ -120,7 +128,8 @@ async def test_auto_triage_reply_contains_commands():
     cog = AlertsCog(bot)
     msg = make_alert_message(bot_authored=True)
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_TRIAGE_RESULT), \
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_TRIAGE_RESULT)), \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""):
         await cog.on_message(msg)
@@ -134,9 +143,9 @@ async def test_auto_triage_ignores_wrong_channel():
     cog = AlertsCog(bot)
     msg = make_alert_message(bot_authored=True, channel_id=9999999)
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock) as mock_json:
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock) as mock_tools:
         await cog.on_message(msg)
-        mock_json.assert_not_called()
+        mock_tools.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -146,9 +155,9 @@ async def test_auto_triage_ignores_human_message():
     msg = make_alert_message(bot_authored=False)
     msg.mentions = []
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock) as mock_json:
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock) as mock_tools:
         await cog.on_message(msg)
-        mock_json.assert_not_called()
+        mock_tools.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -158,9 +167,9 @@ async def test_dedup_skips_already_seen_message():
     msg = make_alert_message(bot_authored=True)
     cog._seen.add(msg.id)
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock) as mock_json:
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock) as mock_tools:
         await cog.on_message(msg)
-        mock_json.assert_not_called()
+        mock_tools.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -170,7 +179,8 @@ async def test_llm_suppress_flag_adds_suppression():
     msg = make_alert_message(bot_authored=True)
     suppress_result = {**FAKE_TRIAGE_RESULT, "suppress": True, "cause": "known tmdb noise"}
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=suppress_result), \
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(suppress_result)), \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""), \
          patch("cogs.alerts.memory.add_suppression") as mock_add_sup:
@@ -187,9 +197,9 @@ async def test_auto_suppress_from_history_skips_triage():
     msg = make_alert_message(bot_authored=True)
 
     with patch("cogs.alerts.memory.check_auto_suppress", return_value=(True, "auto-suppressed after 5 occurrences (low, 90% confidence)")), \
-         patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock) as mock_json:
+         patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock) as mock_tools:
         await cog.on_message(msg)
-        mock_json.assert_not_called()
+        mock_tools.assert_not_called()
         reply_text = msg.reply.call_args[0][0]
         assert "Auto-suppressed" in reply_text
 
@@ -212,12 +222,12 @@ async def test_mention_in_alerts_channel_responds():
 
 
 @pytest.mark.asyncio
-async def test_chat_json_failure_falls_back_to_plain_chat():
+async def test_tool_loop_failure_falls_back_to_plain_chat():
     bot = make_bot()
     cog = AlertsCog(bot)
     msg = make_alert_message(bot_authored=True)
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, side_effect=ValueError("bad json")), \
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock, side_effect=ValueError("bad response")), \
          patch("cogs.alerts.llm.chat", new_callable=AsyncMock, return_value="fallback plain text") as mock_plain, \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""):
@@ -243,9 +253,9 @@ async def test_grafana_resolved_skips_triage():
     cog = AlertsCog(bot)
     msg = make_alert_message(bot_authored=True, content=GRAFANA_RESOLVED)
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock) as mock_json:
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock) as mock_tools:
         await cog.on_message(msg)
-        mock_json.assert_not_called()
+        mock_tools.assert_not_called()
         msg.reply.assert_called_once()
         reply_text = msg.reply.call_args[0][0]
         assert "Resolved" in reply_text
@@ -263,16 +273,17 @@ async def test_grafana_resolved_correlates_to_firing():
     resolved_msg = make_alert_message(bot_authored=True, content=GRAFANA_RESOLVED)
     resolved_msg.id = 101
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_TRIAGE_RESULT), \
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_TRIAGE_RESULT)), \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""):
         await cog.on_message(firing_msg)
 
     assert cog._active_alerts.get("Monitored Container Down") == 100
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock) as mock_json:
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock) as mock_tools:
         await cog.on_message(resolved_msg)
-        mock_json.assert_not_called()
+        mock_tools.assert_not_called()
         reply_text = resolved_msg.reply.call_args[0][0]
         assert "100" in reply_text
         assert "Monitored Container Down" not in cog._active_alerts
@@ -285,7 +296,8 @@ async def test_grafana_firing_triages_and_tracks():
     msg = make_alert_message(bot_authored=True, content=GRAFANA_FIRING)
     msg.id = 55
 
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_TRIAGE_RESULT), \
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_TRIAGE_RESULT)), \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""):
         await cog.on_message(msg)
@@ -339,85 +351,6 @@ def test_format_triage_reply_caps_commands_at_three():
     assert "cmd3" in reply
 
 
-FAKE_LOW_CONFIDENCE_RESULT = {
-    "severity": "medium",
-    "cause": "Unknown network issue",
-    "confidence": 0.45,
-    "commands": ["ssh boss@node1 ip link show"],
-    "next_step": "Investigate network interface",
-    "suppress": False,
-}
-
-FAKE_VERIFIED_RESULT = {
-    "root_cause": "eth4 packet loss due to driver bug",
-    "confidence": 0.82,
-    "evidence": ["kernel: eth4: tx timeout", "kernel: eth4: reset adapter"],
-    "recommended_actions": ["ssh boss@node1 dmesg | grep eth4"],
-    "severity": "medium",
-}
-
-
-@pytest.mark.asyncio
-async def test_verification_pass_triggered_on_low_confidence():
-    bot = make_bot()
-    cog = AlertsCog(bot)
-    msg = make_alert_message(bot_authored=True)
-    loki_logs = "Recent logs from Loki:\n```\nkernel: eth4: tx timeout\n```"
-
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, side_effect=[FAKE_LOW_CONFIDENCE_RESULT, FAKE_VERIFIED_RESULT]) as mock_json, \
-         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=loki_logs), \
-         patch("cogs.alerts.vault.search", return_value=""):
-        await cog.on_message(msg)
-        assert mock_json.call_count == 2
-        second_call_messages = mock_json.call_args_list[1][0][0]
-        assert second_call_messages[0]["content"] == VERIFICATION_PROMPT_JSON
-        reply_text = msg.reply.call_args[0][0]
-        assert "eth4 packet loss due to driver bug" in reply_text
-        assert "eth4: tx timeout" in reply_text
-
-
-@pytest.mark.asyncio
-async def test_verification_pass_skipped_when_no_loki_context():
-    bot = make_bot()
-    cog = AlertsCog(bot)
-    msg = make_alert_message(bot_authored=True)
-
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_LOW_CONFIDENCE_RESULT) as mock_json, \
-         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
-         patch("cogs.alerts.vault.search", return_value=""):
-        await cog.on_message(msg)
-        assert mock_json.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_verification_pass_skipped_on_high_confidence():
-    bot = make_bot()
-    cog = AlertsCog(bot)
-    msg = make_alert_message(bot_authored=True)
-    loki_logs = "Recent logs from Loki:\n```\nsomething\n```"
-
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_TRIAGE_RESULT) as mock_json, \
-         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=loki_logs), \
-         patch("cogs.alerts.vault.search", return_value=""):
-        await cog.on_message(msg)
-        assert mock_json.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_verification_pass_failure_falls_back_to_first_result():
-    bot = make_bot()
-    cog = AlertsCog(bot)
-    msg = make_alert_message(bot_authored=True)
-    loki_logs = "Recent logs from Loki:\n```\nsome log\n```"
-
-    with patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, side_effect=[FAKE_LOW_CONFIDENCE_RESULT, ValueError("bad json")]), \
-         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=loki_logs), \
-         patch("cogs.alerts.vault.search", return_value=""):
-        await cog.on_message(msg)
-        reply_text = msg.reply.call_args[0][0]
-        assert "Unknown network issue" in reply_text
-
-
 FAKE_HYPOTHESIS_RESULT = {
     "severity": "high",
     "hypotheses": [
@@ -437,11 +370,12 @@ async def test_hypothesis_prompt_used_for_new_fingerprint():
     msg = make_alert_message(bot_authored=True, content="container down alert")
 
     with patch("cogs.alerts.memory.get_alert_history", return_value=None), \
-         patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_HYPOTHESIS_RESULT) as mock_json, \
+         patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_HYPOTHESIS_RESULT)) as mock_tools, \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""):
         await cog.on_message(msg)
-        call_messages = mock_json.call_args_list[0][0][0]
+        call_messages = mock_tools.call_args_list[0][0][0]
         assert call_messages[0]["content"] == TRIAGE_PROMPT_HYPOTHESIS
 
 
@@ -453,11 +387,12 @@ async def test_single_cause_prompt_used_for_known_fingerprint():
     existing_history = {"fingerprint": "fp_known", "occurrence_count": 3, "last_seen": 1700000000}
 
     with patch("cogs.alerts.memory.get_alert_history", return_value=existing_history), \
-         patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_TRIAGE_RESULT) as mock_json, \
+         patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_TRIAGE_RESULT)) as mock_tools, \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""):
         await cog.on_message(msg)
-        call_messages = mock_json.call_args_list[0][0][0]
+        call_messages = mock_tools.call_args_list[0][0][0]
         assert call_messages[0]["content"] == TRIAGE_PROMPT_JSON
 
 
@@ -468,7 +403,8 @@ async def test_hypothesis_reply_shows_all_three():
     msg = make_alert_message(bot_authored=True, content="container down alert")
 
     with patch("cogs.alerts.memory.get_alert_history", return_value=None), \
-         patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value=FAKE_HYPOTHESIS_RESULT), \
+         patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_HYPOTHESIS_RESULT)), \
          patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
          patch("cogs.alerts.vault.search", return_value=""):
         await cog.on_message(msg)
@@ -487,3 +423,80 @@ def test_format_triage_reply_renders_hypotheses():
     assert "75%" in reply
     assert "Docker daemon crash" in reply
     assert "dmesg | grep" in reply
+
+
+# --- adaptive tool loop tests ---
+
+@pytest.mark.asyncio
+async def test_triage_loop_dispatches_tool_call_then_answers():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+
+    round_1 = {
+        "role": "assistant", "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function",
+                         "function": {"name": "docker_inspect", "arguments": '{"container":"homelab-vector"}'}}],
+    }
+    round_2 = {"role": "assistant",
+               "content": '{"severity":"low","cause":"container healthy","confidence":0.9,"commands":[],"next_step":"none","suppress":false}'}
+
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock, side_effect=[round_1, round_2]) as mock_tools, \
+         patch("cogs.alerts.checks.dispatch", return_value={"status": "running"}) as mock_dispatch, \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+
+    assert mock_tools.call_count == 2
+    mock_dispatch.assert_called_once_with("docker_inspect", {"container": "homelab-vector"})
+    msg.reply.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_triage_loop_stops_at_round_4():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+
+    always_tool_call = {
+        "role": "assistant", "content": None,
+        "tool_calls": [{"id": "call_x", "type": "function",
+                         "function": {"name": "ping", "arguments": '{"host":"10.0.3.9"}'}}],
+    }
+
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock, return_value=always_tool_call) as mock_tools, \
+         patch("cogs.alerts.checks.dispatch", return_value={"reachable": True}), \
+         patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock,
+               return_value={"severity": "medium", "cause": "unresolved after 4 rounds", "confidence": 0.3, "commands": [], "next_step": "manual review", "suppress": False}) as mock_forced, \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+
+    assert mock_tools.call_count == 4
+    mock_forced.assert_called_once()
+    msg.reply.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_triage_loop_tool_error_does_not_crash():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+
+    round_1 = {
+        "role": "assistant", "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function",
+                         "function": {"name": "docker_inspect", "arguments": '{"container":"x"}'}}],
+    }
+    round_2 = {"role": "assistant",
+               "content": '{"severity":"medium","cause":"could not verify","confidence":0.4,"commands":[],"next_step":"manual check","suppress":false}'}
+
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock, side_effect=[round_1, round_2]), \
+         patch("cogs.alerts.checks.dispatch", return_value={"error": "unknown container"}), \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+
+    msg.reply.assert_called_once()
+    reply_text = msg.reply.call_args[0][0]
+    assert "could not verify" in reply_text.lower() or "MEDIUM" in reply_text
