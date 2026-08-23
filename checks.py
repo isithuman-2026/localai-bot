@@ -7,8 +7,12 @@ string. Every argument is validated against a known-good set before it
 touches a real SDK call, subprocess, or HTTP request.
 """
 
+import json
+import os
+import shutil
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -79,3 +83,46 @@ def curl_health(url: str) -> dict:
             return {"status": resp.status, "body": resp.read(500).decode("utf-8", errors="replace")}
     except urllib.error.URLError as e:
         return {"error": str(e)}
+
+
+PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://monitoring-prometheus:9090")
+LOKI_URL = os.environ.get("LOKI_URL", "http://monitoring-loki:3100")
+
+_DANGEROUS_QUERY_CHARS = {";", "&", "`", "$("}
+
+_DISK_PATH_ALLOWLIST = {"/", "/opt", "/var/log", "/home/boss"}
+
+
+def _query_string_safe(q: str) -> bool:
+    return not any(c in q for c in _DANGEROUS_QUERY_CHARS)
+
+
+def query_prometheus(promql: str) -> dict:
+    if not _query_string_safe(promql):
+        return {"error": "query contains disallowed characters"}
+    url = f"{PROMETHEUS_URL}/api/v1/query?" + urllib.parse.urlencode({"query": promql})
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.URLError as e:
+        return {"error": str(e)}
+
+
+def query_loki(logql: str) -> dict:
+    if not _query_string_safe(logql):
+        return {"error": "query contains disallowed characters"}
+    url = f"{LOKI_URL}/loki/api/v1/query_range?" + urllib.parse.urlencode({"query": logql, "limit": 50})
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.URLError as e:
+        return {"error": str(e)}
+
+
+def disk_usage(path: str) -> dict:
+    from pathlib import Path
+    resolved = Path(path).resolve()
+    if not any(str(resolved) == a or str(resolved).startswith(a + "/") for a in _DISK_PATH_ALLOWLIST):
+        return {"error": f"path not in allowlist: {path!r}"}
+    total, used, free = shutil.disk_usage(str(resolved))
+    return {"total": total, "used": used, "free": free}

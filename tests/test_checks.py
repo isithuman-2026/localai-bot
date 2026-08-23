@@ -90,3 +90,38 @@ def test_curl_health_allows_known_endpoint():
     with patch("checks.urllib.request.urlopen", return_value=fake_cm):
         result = checks.curl_health("http://localai-litellm:4000/health")
     assert result["status"] == 200
+
+
+def test_query_prometheus_rejects_shell_metacharacters():
+    result = checks.query_prometheus("up{job='x'}; rm -rf /")
+    assert "error" in result
+
+
+def test_query_prometheus_sends_query_param():
+    fake_resp = MagicMock()
+    fake_resp.status = 200
+    fake_resp.read.return_value = b'{"status":"success","data":{"result":[]}}'
+    fake_cm = MagicMock()
+    fake_cm.__enter__ = MagicMock(return_value=fake_resp)
+    fake_cm.__exit__ = MagicMock(return_value=False)
+    with patch("checks.urllib.request.urlopen", return_value=fake_cm) as mock_open:
+        result = checks.query_prometheus("up")
+    assert result["status"] == "success"
+    assert "query=up" in mock_open.call_args[0][0]
+
+
+def test_query_loki_rejects_shell_metacharacters():
+    result = checks.query_loki('{job="x"} |= "`whoami`"')
+    assert "error" in result
+
+
+def test_disk_usage_rejects_path_outside_allowlist():
+    result = checks.disk_usage("/etc/shadow")
+    assert "error" in result
+
+
+def test_disk_usage_allows_root():
+    with patch("checks.shutil.disk_usage", return_value=(1000, 500, 500)):
+        result = checks.disk_usage("/")
+    assert result["total"] == 1000
+    assert result["used"] == 500
