@@ -451,6 +451,14 @@ async def test_triage_loop_dispatches_tool_call_then_answers():
     mock_dispatch.assert_called_once_with("docker_inspect", {"container": "homelab-vector"})
     msg.reply.assert_called_once()
 
+    second_call_messages = mock_tools.call_args_list[1][0][0]
+    assistant_tool_msg = second_call_messages[2]
+    tool_result_msg = second_call_messages[3]
+    assert assistant_tool_msg["role"] == "assistant"
+    assert assistant_tool_msg["tool_calls"] == round_1["tool_calls"]
+    assert tool_result_msg["role"] == "tool"
+    assert tool_result_msg["tool_call_id"] == "call_1"
+
 
 @pytest.mark.asyncio
 async def test_triage_loop_stops_at_round_4():

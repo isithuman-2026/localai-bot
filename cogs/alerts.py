@@ -129,6 +129,30 @@ def _fingerprint(content: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:10]
 
 
+def _parse_triage_json(content: str) -> dict:
+    """Parse a JSON verdict object out of a chat_with_tools final answer.
+
+    Unlike chat_json(), chat_with_tools() doesn't force response_format=json_object,
+    so a local model's answer may be wrapped in a ```json fence or preceded by prose.
+    Strip a fence if present, then fall back to slicing the first {...} span.
+    Raises ValueError if the result parses but isn't a JSON object.
+    """
+    text = content.strip()
+    fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        parsed = json.loads(text[start:end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("parsed JSON is not an object")
+    return parsed
+
+
 def _format_triage_reply(result: dict, history: dict | None = None) -> str:
     severity = result.get("severity", "unknown").upper()
     next_step = result.get("next_step", "")
@@ -385,20 +409,25 @@ class AlertsCog(commands.Cog):
             response = await llm.chat_with_tools(messages, checks.TOOL_SCHEMA)
             tool_calls = response.get("tool_calls")
             if not tool_calls:
-                content = response.get("content", "")
+                content = response.get("content") or ""
                 try:
-                    return json.loads(content)
-                except (json.JSONDecodeError, TypeError):
+                    return _parse_triage_json(content)
+                except (json.JSONDecodeError, TypeError, ValueError):
                     return {"severity": "medium", "cause": content[:200], "confidence": 0.3,
                             "commands": [], "next_step": "manual review", "suppress": False}
             messages.append({"role": "assistant", "content": None, "tool_calls": tool_calls})
             for call in tool_calls:
-                fn_name = call["function"]["name"]
-                fn_args = json.loads(call["function"]["arguments"])
-                result = checks.dispatch(fn_name, fn_args)
+                call_id = call.get("id", "")
+                try:
+                    fn_name = call["function"]["name"]
+                    fn_args = call["function"]["arguments"]
+                    fn_args = fn_args if isinstance(fn_args, dict) else json.loads(fn_args)
+                    tool_result = checks.dispatch(fn_name, fn_args)
+                except (json.JSONDecodeError, TypeError, KeyError) as e:
+                    tool_result = {"error": f"invalid arguments: {e}"}
                 messages.append({
-                    "role": "tool", "tool_call_id": call["id"],
-                    "content": json.dumps(result),
+                    "role": "tool", "tool_call_id": call_id,
+                    "content": json.dumps(tool_result),
                 })
         # Round 4 exhausted with no verdict — force a final answer, no tool access
         return await llm.chat_json(messages)
