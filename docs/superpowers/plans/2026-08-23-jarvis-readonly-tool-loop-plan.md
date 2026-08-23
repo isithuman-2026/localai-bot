@@ -49,14 +49,16 @@ In `docker-compose.yml`, under `services.localai-jarvis.volumes`, add:
 
 `userns_mode: "host"` is already set on this service — the existing systemd `socket-acl.conf` drop-in (`setfacl -m u:100000:rw /var/run/docker.sock`, verified live 2026-08-23) already grants the userns-remap subordinate UID read/write access, so no additional host-side change is needed. Mount is `:ro` here since this container only ever inspects/reads logs, never needs write access to the socket itself.
 
-- [ ] **Step 3: Rebuild and verify the mount**
+- [ ] **Step 3: Verify the mount without touching the shared production container**
+
+`docker-compose.yml` hardcodes `container_name: localai-jarvis`, which Compose honors regardless of which checkout runs it — `docker compose up -d` from this worktree would replace the live production container (this happened once already; see Task 5's warning). Verify the socket + userns-remap ACL + `docker` SDK combination with a disposable, uniquely-named container instead:
 
 ```bash
-cd /opt/localai-bot && docker compose build && docker compose up -d
-docker exec localai-jarvis python3 -c "import docker; c = docker.from_env(); print(len(c.containers.list(all=True)), 'containers visible')"
+docker run --rm --userns=host -v /var/run/docker.sock:/var/run/docker.sock:ro python:3.12-alpine \
+  sh -c "pip install -q docker && python3 -c \"import docker; c = docker.from_env(); print(len(c.containers.list(all=True)), 'containers visible')\""
 ```
 
-Expected: prints a container count > 0, no permission errors.
+Expected: prints a container count > 0, no permission errors. Do **not** run `docker compose build`/`up` against `/opt/localai-bot` for this task — that only happens once, in Task 5, after the full branch is reviewed and merged.
 
 - [ ] **Step 4: Commit**
 
@@ -872,6 +874,8 @@ git commit -m "feat: replace fixed verification pass with adaptive read-only too
 ### Task 5: Deploy and verify live
 
 **Files:** none (deployment/verification only)
+
+**⚠️ Added after a real incident during Task 1 (2026-08-23):** `docker-compose.yml` hardcodes `container_name: localai-jarvis` — Compose honors that literally regardless of which checkout you run it from. Running `docker compose build && docker compose up -d` from a worktree still targets and replaces the **live production container**, since the name collision isn't scoped by directory. Task 1's own verification step did exactly this and took down/redeployed production mid-task, cascading into `homelab-vector`'s Docker log watcher flapping. **Before running Step 1 below**, confirm you are in `/opt/localai-bot` on `master` with this plan's branch already reviewed and merged in — never run this from `.worktrees/*`. Tasks 1-4's own verification stays Python-level (imports, unit tests) inside the worktree's venv; this is the only task that touches the real container.
 
 - [ ] **Step 1: Rebuild and restart**
 
