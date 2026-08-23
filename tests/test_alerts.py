@@ -508,3 +508,51 @@ async def test_triage_loop_tool_error_does_not_crash():
     msg.reply.assert_called_once()
     reply_text = msg.reply.call_args[0][0]
     assert "could not verify" in reply_text.lower() or "MEDIUM" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_triage_loop_truncates_oversized_tool_result():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+
+    round_1 = {
+        "role": "assistant", "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function",
+                         "function": {"name": "query_loki", "arguments": '{"logql":"{job=\\"x\\"}"}'}}],
+    }
+    round_2 = {"role": "assistant",
+               "content": '{"severity":"low","cause":"noise","confidence":0.5,"commands":[],"next_step":"none","suppress":false}'}
+    huge_result = {"data": "x" * 10000}
+
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock, side_effect=[round_1, round_2]) as mock_tools, \
+         patch("cogs.alerts.checks.dispatch", return_value=huge_result), \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+
+    second_call_messages = mock_tools.call_args_list[1][0][0]
+    tool_result_msg = second_call_messages[3]
+    assert len(tool_result_msg["content"]) <= 4000
+
+
+@pytest.mark.asyncio
+async def test_triage_loop_round4_handles_non_dict_forced_answer():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+
+    always_tool_call = {
+        "role": "assistant", "content": None,
+        "tool_calls": [{"id": "call_x", "type": "function",
+                         "function": {"name": "ping", "arguments": '{"host":"10.0.3.9"}'}}],
+    }
+
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock, return_value=always_tool_call), \
+         patch("cogs.alerts.checks.dispatch", return_value={"reachable": True}), \
+         patch("cogs.alerts.llm.chat_json", new_callable=AsyncMock, return_value="not a dict"), \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+
+    msg.reply.assert_called_once()

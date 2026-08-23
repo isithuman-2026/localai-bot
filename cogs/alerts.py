@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import os
@@ -422,12 +423,18 @@ class AlertsCog(commands.Cog):
                     fn_name = call["function"]["name"]
                     fn_args = call["function"]["arguments"]
                     fn_args = fn_args if isinstance(fn_args, dict) else json.loads(fn_args)
-                    tool_result = checks.dispatch(fn_name, fn_args)
+                    print(f"[triage] tool call: {fn_name}({fn_args})", flush=True)
+                    tool_result = await asyncio.to_thread(checks.dispatch, fn_name, fn_args)
                 except (json.JSONDecodeError, TypeError, KeyError) as e:
                     tool_result = {"error": f"invalid arguments: {e}"}
                 messages.append({
                     "role": "tool", "tool_call_id": call_id,
-                    "content": json.dumps(tool_result),
+                    "content": json.dumps(tool_result)[:4000],
                 })
         # Round 4 exhausted with no verdict — force a final answer, no tool access
-        return await llm.chat_json(messages)
+        print("[triage] round cap reached, forcing final answer", flush=True)
+        forced = await llm.chat_json(messages)
+        if not isinstance(forced, dict):
+            return {"severity": "medium", "cause": str(forced)[:200], "confidence": 0.3,
+                    "commands": [], "next_step": "manual review", "suppress": False}
+        return forced
