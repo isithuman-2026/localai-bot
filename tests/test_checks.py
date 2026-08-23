@@ -56,3 +56,37 @@ def test_docker_logs_rejects_unknown_container():
     with patch("checks.docker.from_env", return_value=mock_client):
         result = checks.docker_logs("not-a-real-container")
     assert result.startswith("error:")
+
+
+def test_ping_rejects_host_not_in_allowlist():
+    result = checks.ping("evil.example.com")
+    assert "error" in result
+
+
+def test_ping_allows_known_host(monkeypatch):
+    fake_completed = MagicMock()
+    fake_completed.returncode = 0
+    fake_completed.stdout = "3 packets transmitted, 3 received, 0% packet loss"
+    with patch("checks.subprocess.run", return_value=fake_completed) as mock_run:
+        result = checks.ping("10.0.3.9")
+    assert result["reachable"] is True
+    args = mock_run.call_args[0][0]
+    assert args[0] == "ping"
+    assert "shell" not in mock_run.call_args[1] or mock_run.call_args[1].get("shell") is not True
+
+
+def test_curl_health_rejects_url_not_in_allowlist():
+    result = checks.curl_health("http://evil.example.com/steal")
+    assert "error" in result
+
+
+def test_curl_health_allows_known_endpoint():
+    fake_resp = MagicMock()
+    fake_resp.status = 200
+    fake_resp.read.return_value = b"OK"
+    fake_cm = MagicMock()
+    fake_cm.__enter__ = MagicMock(return_value=fake_resp)
+    fake_cm.__exit__ = MagicMock(return_value=False)
+    with patch("checks.urllib.request.urlopen", return_value=fake_cm):
+        result = checks.curl_health("http://localai-litellm:4000/health")
+    assert result["status"] == 200

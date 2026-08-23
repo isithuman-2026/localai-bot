@@ -7,6 +7,9 @@ string. Every argument is validated against a known-good set before it
 touches a real SDK call, subprocess, or HTTP request.
 """
 
+import subprocess
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 import docker
@@ -39,3 +42,40 @@ def docker_logs(container: str, since_minutes: int = 20) -> str:
     c = client.containers.get(container)
     raw = c.logs(since=since_dt, timestamps=False, stdout=True, stderr=True)
     return raw.decode("utf-8", errors="replace")[:4000]
+
+
+_PING_ALLOWLIST = {
+    "10.0.3.9",    # node1
+    "10.0.0.12",   # Alpha60
+    "10.0.0.44",   # vault44
+    "10.0.0.1",    # UDR (Servers zone)
+    "10.0.3.1",    # UDR (IoT zone)
+    "10.0.0.10",   # AdGuard
+}
+
+_HEALTH_URL_ALLOWLIST = {
+    "http://localai-litellm:4000/health",
+    "http://monitoring-prometheus:9090/-/healthy",
+    "http://monitoring-loki:3100/ready",
+    "http://traefik:8082/ping",
+}
+
+
+def ping(host: str) -> dict:
+    if host not in _PING_ALLOWLIST:
+        return {"error": f"host not in allowlist: {host!r}"}
+    result = subprocess.run(
+        ["ping", "-c", "3", "-W", "2", host],
+        capture_output=True, text=True, timeout=10,
+    )
+    return {"reachable": result.returncode == 0, "output": result.stdout[-500:]}
+
+
+def curl_health(url: str) -> dict:
+    if url not in _HEALTH_URL_ALLOWLIST:
+        return {"error": f"url not in allowlist: {url!r}"}
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            return {"status": resp.status, "body": resp.read(500).decode("utf-8", errors="replace")}
+    except urllib.error.URLError as e:
+        return {"error": str(e)}
