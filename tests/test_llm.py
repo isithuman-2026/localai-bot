@@ -82,3 +82,63 @@ async def test_chat_json_raises_on_invalid_json():
     with patch("llm.httpx.AsyncClient", return_value=mock_client):
         with pytest.raises(Exception):
             await llm.chat_json([{"role": "user", "content": "triage this"}])
+
+
+@pytest.mark.asyncio
+async def test_chat_with_tools_returns_tool_calls():
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json.return_value = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "docker_inspect", "arguments": '{"container":"homelab-vector"}'},
+                }],
+            },
+            "finish_reason": "tool_calls",
+        }]
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=fake_response)
+
+    tools = [{"type": "function", "function": {"name": "docker_inspect", "parameters": {}}}]
+
+    with patch("llm.httpx.AsyncClient", return_value=mock_client):
+        result = await llm.chat_with_tools(
+            [{"role": "user", "content": "check homelab-vector"}], tools
+        )
+
+    assert result["tool_calls"][0]["function"]["name"] == "docker_inspect"
+    call_kwargs = mock_client.post.call_args
+    assert call_kwargs[1]["json"]["tools"] == tools
+    assert call_kwargs[1]["json"]["max_tokens"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_chat_with_tools_returns_content_when_no_tool_call():
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json.return_value = {
+        "choices": [{
+            "message": {"role": "assistant", "content": '{"severity":"low","cause":"fine"}'},
+            "finish_reason": "stop",
+        }]
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=fake_response)
+
+    with patch("llm.httpx.AsyncClient", return_value=mock_client):
+        result = await llm.chat_with_tools([{"role": "user", "content": "hi"}], tools=[])
+
+    assert "tool_calls" not in result
+    assert result["content"] == '{"severity":"low","cause":"fine"}'
