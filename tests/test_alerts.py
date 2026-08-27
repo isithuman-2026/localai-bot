@@ -543,6 +543,40 @@ async def test_triage_with_remediation_stores_pending_and_reacts():
     assert "restart_container" in reply_text
 
 
+FAKE_TRIAGE_WITH_AUTO_REMEDIATION = {
+    **FAKE_TRIAGE_RESULT,
+    "remediation": {"tool": "restart_container", "args": {"container": "monitoring-blackbox-exporter"}},
+}
+
+
+@pytest.mark.asyncio
+async def test_triage_with_low_impact_remediation_auto_executes():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+
+    sent_message = MagicMock()
+    sent_message.id = 9003
+    sent_message.add_reaction = AsyncMock()
+    sent_message.reply = AsyncMock()
+    msg.reply = AsyncMock(return_value=sent_message)
+
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_TRIAGE_WITH_AUTO_REMEDIATION)), \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""), \
+         patch("cogs.alerts.remediate.dispatch", return_value={"restarted": "monitoring-blackbox-exporter", "status": "running"}) as mock_dispatch:
+        await cog.on_message(msg)
+
+    mock_dispatch.assert_called_once_with("restart_container", {"container": "monitoring-blackbox-exporter"})
+    sent_message.add_reaction.assert_not_called()
+    assert cog._pending_remediations == {}
+    sent_message.reply.assert_called_once()
+    assert "Auto-remediated" in sent_message.reply.call_args[0][0]
+    reply_text = msg.reply.call_args[0][0]
+    assert "auto-remediating" in reply_text.lower()
+
+
 @pytest.mark.asyncio
 async def test_triage_without_remediation_does_not_react():
     bot = make_bot()

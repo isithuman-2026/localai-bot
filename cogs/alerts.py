@@ -220,11 +220,16 @@ def _format_triage_reply(result: dict, history: dict | None = None) -> str:
 
     remediation = result.get("remediation")
     if remediation and remediation.get("tool"):
-        args_str = ", ".join(f"{k}={v}" for k, v in (remediation.get("args") or {}).items())
-        lines.append(
-            f"\n🔧 **Remediation available:** `{remediation['tool']}({args_str})` — "
-            f"react 👍 within {REMEDIATION_CONFIRM_WINDOW_SECS // 60} min to run it."
-        )
+        tool = remediation["tool"]
+        args = remediation.get("args") or {}
+        args_str = ", ".join(f"{k}={v}" for k, v in args.items())
+        if remediate.requires_confirmation(tool, args):
+            lines.append(
+                f"\n🔧 **Remediation available:** `{tool}({args_str})` — "
+                f"react 👍 within {REMEDIATION_CONFIRM_WINDOW_SECS // 60} min to run it."
+            )
+        else:
+            lines.append(f"\n⚡ **Low-impact fix — auto-remediating:** `{tool}({args_str})`")
 
     return "\n".join(lines)
 
@@ -418,13 +423,19 @@ class AlertsCog(commands.Cog):
 
         remediation = result.get("remediation")
         if remediation and remediation.get("tool") in remediate.REMEDIATION_TOOL_NAMES:
-            self._pending_remediations[sent.id] = (
-                remediation["tool"], remediation.get("args") or {}, time.time(),
-            )
-            try:
-                await sent.add_reaction(REMEDIATION_CONFIRM_EMOJI)
-            except discord.DiscordException:
-                pass
+            tool, args = remediation["tool"], remediation.get("args") or {}
+            if remediate.requires_confirmation(tool, args):
+                self._pending_remediations[sent.id] = (tool, args, time.time())
+                try:
+                    await sent.add_reaction(REMEDIATION_CONFIRM_EMOJI)
+                except discord.DiscordException:
+                    pass
+            else:
+                auto_result = await asyncio.to_thread(remediate.dispatch, tool, args)
+                if "error" in auto_result:
+                    await sent.reply(f"⚠️ Auto-remediation failed: {auto_result['error']}")
+                else:
+                    await sent.reply(f"✅ Auto-remediated `{tool}`: {json.dumps(auto_result)[:500]}")
 
         memory.log_observation(
             event=content[:200],

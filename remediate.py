@@ -7,14 +7,21 @@ dispatch table. Nothing here runs from the LLM tool loop directly — alerts.py
 only calls dispatch() after a human confirms via reaction.
 """
 
+import os
 import time
 from pathlib import Path
 
 import docker
 
-_RESTART_ALLOWLIST = {
-    "homelab-vector",
-    "homelab-scripts",
+REMEDIATE_DOCKER_HOST = os.environ.get("REMEDIATE_DOCKER_HOST", "tcp://jarvis-socket-proxy:2375")
+
+
+def _client() -> docker.DockerClient:
+    return docker.DockerClient(base_url=REMEDIATE_DOCKER_HOST)
+
+# Passive containers: nothing else depends on their uptime, restarting drops
+# a few seconds of metrics/logs and nothing else. Safe to auto-execute.
+AUTO_RESTART_ALLOWLIST = {
     "unpoller",
     "homelab-adguard-exporter",
     "homelab-dockhand-exporter",
@@ -24,11 +31,32 @@ _RESTART_ALLOWLIST = {
     "monitoring-snmp-exporter",
 }
 
+# Functional pipeline components: a mid-restart timing issue could drop real
+# data (log ingestion, cron jobs). Require a human 👍 before executing.
+CONFIRM_RESTART_ALLOWLIST = {
+    "homelab-vector",
+    "homelab-scripts",
+}
+
+_RESTART_ALLOWLIST = AUTO_RESTART_ALLOWLIST | CONFIRM_RESTART_ALLOWLIST
+
+# Tools with no target-dependent risk — always auto-execute.
+_ALWAYS_AUTO_TOOLS = {"prune_old_logs"}
+
+
+def requires_confirmation(tool: str, args: dict) -> bool:
+    """True if a human 👍 must gate this action before dispatch() runs it."""
+    if tool in _ALWAYS_AUTO_TOOLS:
+        return False
+    if tool == "restart_container":
+        return args.get("container") not in AUTO_RESTART_ALLOWLIST
+    return True
+
 
 def restart_container(container: str) -> dict:
     if container not in _RESTART_ALLOWLIST:
         return {"error": f"container not in restart allowlist: {container!r}"}
-    client = docker.from_env()
+    client = _client()
     c = client.containers.get(container)
     c.restart(timeout=10)
     c.reload()

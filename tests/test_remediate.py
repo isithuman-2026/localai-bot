@@ -13,7 +13,7 @@ def test_restart_container_allows_known_container():
     fake_container.status = "running"
     mock_client = MagicMock()
     mock_client.containers.get.return_value = fake_container
-    with patch("remediate.docker.from_env", return_value=mock_client):
+    with patch("remediate._client", return_value=mock_client):
         result = remediate.restart_container("homelab-vector")
     fake_container.restart.assert_called_once_with(timeout=10)
     assert result == {"restarted": "homelab-vector", "status": "running"}
@@ -65,6 +65,22 @@ def test_dispatch_catches_exceptions():
         result = remediate.dispatch("restart_container", {"container": "x"})
     assert "error" in result
     assert "boom" in result["error"]
+
+
+def test_requires_confirmation_false_for_always_auto_tool():
+    assert remediate.requires_confirmation("prune_old_logs", {}) is False
+
+
+def test_requires_confirmation_false_for_auto_tier_container():
+    assert remediate.requires_confirmation("restart_container", {"container": "monitoring-blackbox-exporter"}) is False
+
+
+def test_requires_confirmation_true_for_confirm_tier_container():
+    assert remediate.requires_confirmation("restart_container", {"container": "homelab-vector"}) is True
+
+
+def test_requires_confirmation_true_for_unknown_container():
+    assert remediate.requires_confirmation("restart_container", {"container": "not-a-container"}) is True
 
 
 def test_remediate_tool_schema_names_match_dispatch_table():

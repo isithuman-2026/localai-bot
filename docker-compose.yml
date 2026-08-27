@@ -12,11 +12,62 @@ services:
       - PROMETHEUS_URL=http://monitoring-prometheus:9090
       - CHROMA_PATH=/data/chroma
       - DOCKER_HOST=tcp://socket-proxy:2375
+      - REMEDIATE_DOCKER_HOST=tcp://jarvis-socket-proxy:2375
     volumes:
       - /opt/obsidian-vault:/vault:rw
       - chroma_data:/data/chroma
       - /opt/localai-bot/data:/app/data
       - /home/boss/projects/homelab-monitor/data/logs:/homelab-logs:rw
+    networks:
+      - ai-agent-net
+    depends_on:
+      jarvis-socket-proxy:
+        condition: service_healthy
+
+  # Dedicated, minimal write-capable socket proxy for remediate.py only.
+  # The shared socket-proxy (/opt/infra) is read-only (POST=0) by design and
+  # serves every stack on ai-agent-net — this one is reachable by nothing but
+  # localai-jarvis, so a bug in remediate.py can't reach beyond this proxy.
+  jarvis-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: jarvis-socket-proxy
+    hostname: jarvis-socket-proxy
+    restart: unless-stopped
+    userns_mode: "host"
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1
+      POST: 1
+      EVENTS: 0
+      INFO: 0
+      LOGS: 0
+      NETWORKS: 0
+      SERVICES: 0
+      TASKS: 0
+      VERSION: 1
+      EXEC: 0
+      IMAGES: 0
+      VOLUMES: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      NODES: 0
+      PLUGINS: 0
+      SECRETS: 0
+      SESSION: 0
+      SWARM: 0
+      SYSTEM: 0
+      AUTH: 0
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2375"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     networks:
       - ai-agent-net
 
