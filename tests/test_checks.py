@@ -151,3 +151,97 @@ def test_dispatch_catches_exceptions():
 def test_tool_schema_names_match_dispatch_table():
     schema_names = {t["function"]["name"] for t in checks.TOOL_SCHEMA}
     assert schema_names == set(checks._DISPATCH_TABLE.keys())
+
+
+def test_dns_lookup_rejects_hostname_not_in_allowlist():
+    result = checks.dns_lookup("evil.example.com")
+    assert "error" in result
+
+
+def test_dns_lookup_allows_known_hostname(monkeypatch):
+    with patch("checks.socket.gethostbyname", return_value="10.0.0.44") as mock_resolve:
+        result = checks.dns_lookup("vault44")
+    assert result["resolved"] == "10.0.0.44"
+    mock_resolve.assert_called_once_with("vault44")
+
+
+def test_traceroute_rejects_host_not_in_allowlist():
+    result = checks.traceroute("evil.example.com")
+    assert "error" in result
+
+
+def test_traceroute_allows_known_host():
+    fake_completed = MagicMock()
+    fake_completed.stdout = "traceroute to 10.0.3.9 ..."
+    with patch("checks.subprocess.run", return_value=fake_completed) as mock_run:
+        result = checks.traceroute("10.0.3.9")
+    assert "traceroute" in result["output"]
+    args = mock_run.call_args[0][0]
+    assert args[0] == "traceroute"
+
+
+def test_port_check_rejects_pair_not_in_allowlist():
+    result = checks.port_check("evil.example.com", 22)
+    assert "error" in result
+
+
+def test_port_check_allows_known_pair_open():
+    fake_sock = MagicMock()
+    with patch("checks.socket.socket", return_value=fake_sock):
+        result = checks.port_check("10.0.3.9", 5432)
+    assert result["open"] is True
+    fake_sock.connect.assert_called_once_with(("10.0.3.9", 5432))
+
+
+def test_port_check_reports_closed_on_connection_error():
+    fake_sock = MagicMock()
+    fake_sock.connect.side_effect = OSError("refused")
+    with patch("checks.socket.socket", return_value=fake_sock):
+        result = checks.port_check("10.0.3.9", 5432)
+    assert result["open"] is False
+
+
+def test_docker_stats_rejects_unknown_container():
+    mock_client = MagicMock()
+    mock_client.containers.list.return_value = []
+    with patch("checks.docker.from_env", return_value=mock_client):
+        result = checks.docker_stats("not-a-real-container")
+    assert "error" in result
+
+
+def test_docker_stats_computes_cpu_and_memory():
+    fake_container = MagicMock()
+    fake_container.name = "homelab-vector"
+    fake_container.stats.return_value = {
+        "cpu_stats": {"cpu_usage": {"total_usage": 1000}, "system_cpu_usage": 10000, "online_cpus": 4},
+        "precpu_stats": {"cpu_usage": {"total_usage": 900}, "system_cpu_usage": 9000},
+        "memory_stats": {"usage": 100 * 1024 * 1024, "limit": 400 * 1024 * 1024},
+    }
+    mock_client = MagicMock()
+    mock_client.containers.list.return_value = [fake_container]
+    mock_client.containers.get.return_value = fake_container
+    with patch("checks.docker.from_env", return_value=mock_client):
+        result = checks.docker_stats("homelab-vector")
+    assert result["cpu_percent"] == 40.0
+    assert result["mem_usage_mb"] == 100.0
+    assert result["mem_limit_mb"] == 400.0
+
+
+def test_list_unhealthy_containers_merges_unhealthy_and_restarting():
+    unhealthy = MagicMock()
+    unhealthy.name = "a"
+    restarting = MagicMock()
+    restarting.name = "b"
+    mock_client = MagicMock()
+
+    def fake_list(filters=None, **kwargs):
+        if filters == {"health": "unhealthy"}:
+            return [unhealthy]
+        if filters == {"status": "restarting"}:
+            return [restarting]
+        return []
+
+    mock_client.containers.list.side_effect = fake_list
+    with patch("checks.docker.from_env", return_value=mock_client):
+        result = checks.list_unhealthy_containers()
+    assert result["containers"] == ["a", "b"]

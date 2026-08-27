@@ -510,6 +510,135 @@ async def test_triage_loop_tool_error_does_not_crash():
     assert "could not verify" in reply_text.lower() or "MEDIUM" in reply_text
 
 
+# --- remediation confirm-gate tests ---
+
+FAKE_TRIAGE_WITH_REMEDIATION = {
+    **FAKE_TRIAGE_RESULT,
+    "remediation": {"tool": "restart_container", "args": {"container": "homelab-vector"}},
+}
+
+
+@pytest.mark.asyncio
+async def test_triage_with_remediation_stores_pending_and_reacts():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+
+    sent_message = MagicMock()
+    sent_message.id = 9001
+    sent_message.add_reaction = AsyncMock()
+    msg.reply = AsyncMock(return_value=sent_message)
+
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_TRIAGE_WITH_REMEDIATION)), \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+
+    assert cog._pending_remediations[9001][0] == "restart_container"
+    assert cog._pending_remediations[9001][1] == {"container": "homelab-vector"}
+    sent_message.add_reaction.assert_called_once_with("👍")
+    reply_text = msg.reply.call_args[0][0]
+    assert "Remediation available" in reply_text
+    assert "restart_container" in reply_text
+
+
+@pytest.mark.asyncio
+async def test_triage_without_remediation_does_not_react():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    msg = make_alert_message(bot_authored=True)
+
+    sent_message = MagicMock()
+    sent_message.id = 9002
+    sent_message.add_reaction = AsyncMock()
+    msg.reply = AsyncMock(return_value=sent_message)
+
+    with patch("cogs.alerts.llm.chat_with_tools", new_callable=AsyncMock,
+               return_value=_tool_response(FAKE_TRIAGE_RESULT)), \
+         patch("cogs.alerts.lokiquery.fetch_context", new_callable=AsyncMock, return_value=""), \
+         patch("cogs.alerts.vault.search", return_value=""):
+        await cog.on_message(msg)
+
+    assert cog._pending_remediations == {}
+    sent_message.add_reaction.assert_not_called()
+
+
+def _make_reaction_payload(message_id=9001, channel_id=1488857934061633697, user_id=123, emoji="👍"):
+    payload = MagicMock(spec=discord.RawReactionActionEvent)
+    payload.message_id = message_id
+    payload.channel_id = channel_id
+    payload.user_id = user_id
+    payload.emoji = emoji
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_reaction_confirms_and_runs_remediation():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    cog._pending_remediations[9001] = ("restart_container", {"container": "homelab-vector"}, __import__("time").time())
+
+    fetched_message = MagicMock()
+    fetched_message.reply = AsyncMock()
+    channel = MagicMock()
+    channel.fetch_message = AsyncMock(return_value=fetched_message)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    payload = _make_reaction_payload()
+    with patch("cogs.alerts.remediate.dispatch", return_value={"restarted": "homelab-vector", "status": "running"}) as mock_dispatch:
+        await cog.on_raw_reaction_add(payload)
+
+    mock_dispatch.assert_called_once_with("restart_container", {"container": "homelab-vector"})
+    fetched_message.reply.assert_called_once()
+    assert "Ran" in fetched_message.reply.call_args[0][0]
+    assert 9001 not in cog._pending_remediations
+
+
+@pytest.mark.asyncio
+async def test_reaction_ignores_wrong_emoji():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    cog._pending_remediations[9001] = ("restart_container", {"container": "homelab-vector"}, __import__("time").time())
+
+    payload = _make_reaction_payload(emoji="👎")
+    with patch("cogs.alerts.remediate.dispatch") as mock_dispatch:
+        await cog.on_raw_reaction_add(payload)
+
+    mock_dispatch.assert_not_called()
+    assert 9001 in cog._pending_remediations
+
+
+@pytest.mark.asyncio
+async def test_reaction_ignores_expired_pending():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    cog._pending_remediations[9001] = (
+        "restart_container", {"container": "homelab-vector"},
+        __import__("time").time() - 700,
+    )
+
+    payload = _make_reaction_payload()
+    with patch("cogs.alerts.remediate.dispatch") as mock_dispatch:
+        await cog.on_raw_reaction_add(payload)
+
+    mock_dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reaction_ignores_wrong_channel():
+    bot = make_bot()
+    cog = AlertsCog(bot)
+    cog._pending_remediations[9001] = ("restart_container", {"container": "homelab-vector"}, __import__("time").time())
+
+    payload = _make_reaction_payload(channel_id=1)
+    with patch("cogs.alerts.remediate.dispatch") as mock_dispatch:
+        await cog.on_raw_reaction_add(payload)
+
+    mock_dispatch.assert_not_called()
+    assert 9001 in cog._pending_remediations
+
+
 @pytest.mark.asyncio
 async def test_triage_loop_truncates_oversized_tool_result():
     bot = make_bot()

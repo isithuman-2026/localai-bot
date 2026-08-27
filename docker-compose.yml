@@ -16,6 +16,7 @@ services:
       - /opt/obsidian-vault:/vault:rw
       - chroma_data:/data/chroma
       - /opt/localai-bot/data:/app/data
+      - /home/boss/projects/homelab-monitor/data/logs:/homelab-logs:rw
     networks:
       - ai-agent-net
 

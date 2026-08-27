@@ -12,6 +12,7 @@ import vault
 import memory
 import sysstats
 import checks
+import remediate
 
 ALERTS_CHANNEL_ID = int(os.environ.get("ALERTS_CHANNEL_ID", "1488857934061633697"))
 DISCLAUDE_BOT_ID = int(os.environ.get("DISCLAUDE_BOT_ID", "1495259014014046229"))
@@ -40,19 +41,32 @@ TOOL_AVAILABILITY_NOTE = (
     "schema below. Don't use tools for alerts that are already clear from the context provided.\n"
 )
 
+REMEDIATION_NOTE = (
+    "\nYou may also propose ONE remediation action if you're confident (confidence >= 0.6) it fixes the "
+    "root cause. Available remediation tools:\n"
+    "- restart_container: args {\"container\": \"<name>\"} — only for: "
+    + ", ".join(sorted(remediate._RESTART_ALLOWLIST)) + "\n"
+    "- prune_old_logs: args {} — for disk-pressure-from-logs alerts\n"
+    "If no remediation applies or confidence is below 0.6, set remediation to null. A human must confirm "
+    "before anything runs — you are only proposing, never executing.\n"
+)
+
 TRIAGE_PROMPT_JSON = (
     "You are a homelab security and ops assistant. You have full knowledge of this homelab's topology and services.\n\n"
     + HOMELAB_CONTEXT
     + "\nAnalyse the alert."
     + TOOL_AVAILABILITY_NOTE
+    + REMEDIATION_NOTE
     + " Respond ONLY with a JSON object matching this exact schema:\n"
     '{"severity":"critical|high|medium|low","cause":"one sentence root cause","confidence":0.0,'
-    '"commands":["ssh boss@node1 <exact command>"],"next_step":"one concrete action","suppress":false}\n\n'
+    '"commands":["ssh boss@node1 <exact command>"],"next_step":"one concrete action","suppress":false,'
+    '"remediation":{"tool":"restart_container|prune_old_logs|null","args":{}}}\n\n'
     "Rules:\n"
     "- severity: use 'low' only if truly non-impacting noise\n"
     "- confidence: 0.0-1.0, your certainty about the cause\n"
     "- commands: max 3, copy-pasteable, prefix node1 commands with 'ssh boss@node1'\n"
     "- suppress: true only if this is known persistent noise with no action needed\n"
+    "- remediation: null unless a listed tool directly fixes the root cause with confidence >= 0.6\n"
     "- No preamble. No explanation. JSON only."
 )
 
@@ -72,6 +86,8 @@ TRIAGE_PROMPT_HYPOTHESIS = (
 )
 
 TRIAGE_COOLDOWN_SECS = 3600
+REMEDIATION_CONFIRM_WINDOW_SECS = 600
+REMEDIATION_CONFIRM_EMOJI = "👍"
 
 _UPDATE_RE = re.compile(r"security updates installed", re.IGNORECASE)
 _CODE_BLOCK_RE = re.compile(r"```\s*(.*?)\s*```", re.DOTALL)
@@ -202,6 +218,14 @@ def _format_triage_reply(result: dict, history: dict | None = None) -> str:
     if next_step:
         lines.append(f"\n**Next:** {next_step}")
 
+    remediation = result.get("remediation")
+    if remediation and remediation.get("tool"):
+        args_str = ", ".join(f"{k}={v}" for k, v in (remediation.get("args") or {}).items())
+        lines.append(
+            f"\n🔧 **Remediation available:** `{remediation['tool']}({args_str})` — "
+            f"react 👍 within {REMEDIATION_CONFIRM_WINDOW_SECS // 60} min to run it."
+        )
+
     return "\n".join(lines)
 
 
@@ -211,6 +235,7 @@ class AlertsCog(commands.Cog):
         self._seen: set[int] = set()
         self._active_alerts: dict[str, int] = {}
         self._triage_cooldowns: dict[str, tuple[int, float]] = {}
+        self._pending_remediations: dict[int, tuple[str, dict, float]] = {}
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -389,7 +414,17 @@ class AlertsCog(commands.Cog):
         )
 
         reply = re_escalated_note + _format_triage_reply(result, history)
-        await message.reply(reply[:1990])
+        sent = await message.reply(reply[:1990])
+
+        remediation = result.get("remediation")
+        if remediation and remediation.get("tool") in remediate.REMEDIATION_TOOL_NAMES:
+            self._pending_remediations[sent.id] = (
+                remediation["tool"], remediation.get("args") or {}, time.time(),
+            )
+            try:
+                await sent.add_reaction(REMEDIATION_CONFIRM_EMOJI)
+            except discord.DiscordException:
+                pass
 
         memory.log_observation(
             event=content[:200],
@@ -400,6 +435,33 @@ class AlertsCog(commands.Cog):
             confidence=primary_confidence,
             severity=result.get("severity", ""),
         )
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        if payload.channel_id != ALERTS_CHANNEL_ID:
+            return
+        if payload.user_id == self.bot.user.id:
+            return
+        if str(payload.emoji) != REMEDIATION_CONFIRM_EMOJI:
+            return
+
+        pending = self._pending_remediations.pop(payload.message_id, None)
+        if pending is None:
+            return
+        tool, args, ts = pending
+        if time.time() - ts > REMEDIATION_CONFIRM_WINDOW_SECS:
+            return
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            return
+        message = await channel.fetch_message(payload.message_id)
+
+        result = await asyncio.to_thread(remediate.dispatch, tool, args)
+        if "error" in result:
+            await message.reply(f"⚠️ Remediation failed: {result['error']}")
+        else:
+            await message.reply(f"✅ Ran `{tool}`: {json.dumps(result)[:500]}")
 
     async def _run_tool_loop(self, system_prompt: str, user_content: str) -> dict:
         messages = [

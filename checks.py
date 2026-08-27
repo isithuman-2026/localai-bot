@@ -9,7 +9,9 @@ touches a real SDK call, subprocess, or HTTP request.
 
 import json
 import os
+import re
 import shutil
+import socket
 import subprocess
 import urllib.error
 import urllib.parse
@@ -119,6 +121,86 @@ def query_loki(logql: str) -> dict:
         return {"error": str(e)}
 
 
+_HOSTNAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,253}$")
+
+_DNS_LOOKUP_ALLOWLIST = {
+    "vault44", "alpha60", "node1", "traefik", "authelia", "socket-proxy",
+    "homelab-vector", "homelab-scripts", "homelab-adguard",
+    "monitoring-grafana", "monitoring-loki", "monitoring-prometheus",
+    "localai-litellm", "localai-llm",
+    "github.com", "1.1.1.1", "8.8.8.8",
+}
+
+
+def dns_lookup(hostname: str) -> dict:
+    if hostname not in _DNS_LOOKUP_ALLOWLIST or not _HOSTNAME_RE.match(hostname):
+        return {"error": f"hostname not in allowlist: {hostname!r}"}
+    try:
+        return {"resolved": socket.gethostbyname(hostname)}
+    except socket.gaierror as e:
+        return {"error": str(e)}
+
+
+def traceroute(host: str) -> dict:
+    if host not in _PING_ALLOWLIST:
+        return {"error": f"host not in allowlist: {host!r}"}
+    result = subprocess.run(
+        ["traceroute", "-m", "12", "-w", "2", host],
+        capture_output=True, text=True, timeout=30,
+    )
+    return {"output": result.stdout[-1500:]}
+
+
+_PORT_CHECK_ALLOWLIST = {
+    ("10.0.3.9", 5432), ("10.0.3.9", 3100), ("10.0.3.9", 9090),
+    ("10.0.0.44", 5000), ("10.0.0.12", 5000), ("10.0.0.10", 53),
+}
+
+
+def port_check(host: str, port: int) -> dict:
+    if (host, port) not in _PORT_CHECK_ALLOWLIST:
+        return {"error": f"host/port not in allowlist: {host!r}:{port!r}"}
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(3)
+    try:
+        sock.connect((host, port))
+        return {"open": True}
+    except OSError as e:
+        return {"open": False, "error": str(e)}
+    finally:
+        sock.close()
+
+
+def docker_stats(container: str) -> dict:
+    client = docker.from_env()
+    known = _known_container_names(client)
+    if container not in known:
+        return {"error": f"unknown container: {container!r}"}
+    c = client.containers.get(container)
+    stats = c.stats(stream=False)
+    try:
+        cpu_delta = stats["cpu_stats"]["cpu_usage"]["total_usage"] - stats["precpu_stats"]["cpu_usage"]["total_usage"]
+        system_delta = stats["cpu_stats"]["system_cpu_usage"] - stats["precpu_stats"]["system_cpu_usage"]
+        cpu_percent = (cpu_delta / system_delta) * stats["cpu_stats"]["online_cpus"] * 100 if system_delta > 0 else 0.0
+    except (KeyError, ZeroDivisionError):
+        cpu_percent = 0.0
+    mem_usage = stats.get("memory_stats", {}).get("usage", 0)
+    mem_limit = stats.get("memory_stats", {}).get("limit", 0)
+    return {
+        "cpu_percent": round(cpu_percent, 1),
+        "mem_usage_mb": round(mem_usage / (1024 * 1024), 1),
+        "mem_limit_mb": round(mem_limit / (1024 * 1024), 1),
+    }
+
+
+def list_unhealthy_containers() -> dict:
+    client = docker.from_env()
+    unhealthy = client.containers.list(filters={"health": "unhealthy"})
+    restarting = client.containers.list(filters={"status": "restarting"})
+    names = sorted({c.name for c in unhealthy} | {c.name for c in restarting})
+    return {"containers": names}
+
+
 def disk_usage(path: str) -> dict:
     from pathlib import Path
     resolved = Path(path).resolve()
@@ -136,6 +218,11 @@ _DISPATCH_TABLE = {
     "query_prometheus": query_prometheus,
     "query_loki": query_loki,
     "disk_usage": disk_usage,
+    "dns_lookup": dns_lookup,
+    "traceroute": traceroute,
+    "port_check": port_check,
+    "docker_stats": docker_stats,
+    "list_unhealthy_containers": list_unhealthy_containers,
 }
 
 
@@ -188,5 +275,32 @@ TOOL_SCHEMA = [
         "name": "disk_usage",
         "description": "Get total/used/free disk usage for a known path (/, /opt, /var/log, /home/boss).",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    }},
+    {"type": "function", "function": {
+        "name": "dns_lookup",
+        "description": "Resolve a known hostname to an IP. Use to diagnose AdGuard/DNS-down incidents.",
+        "parameters": {"type": "object", "properties": {"hostname": {"type": "string"}}, "required": ["hostname"]},
+    }},
+    {"type": "function", "function": {
+        "name": "traceroute",
+        "description": "Traceroute to a known homelab host. Use to isolate WAN vs UDR vs LAN connectivity issues.",
+        "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"]},
+    }},
+    {"type": "function", "function": {
+        "name": "port_check",
+        "description": "Check whether a known host:port is accepting TCP connections.",
+        "parameters": {"type": "object", "properties": {
+            "host": {"type": "string"}, "port": {"type": "integer"},
+        }, "required": ["host", "port"]},
+    }},
+    {"type": "function", "function": {
+        "name": "docker_stats",
+        "description": "Get live CPU% and memory usage/limit for a known Docker container. Use to root-cause disk/mem pressure alerts.",
+        "parameters": {"type": "object", "properties": {"container": {"type": "string"}}, "required": ["container"]},
+    }},
+    {"type": "function", "function": {
+        "name": "list_unhealthy_containers",
+        "description": "List containers currently reporting unhealthy or restarting status. Use to scope which container an alert refers to.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
     }},
 ]
