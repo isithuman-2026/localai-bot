@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-rc-alpine3.19
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends iputils-ping traceroute && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY requirements.txt .
