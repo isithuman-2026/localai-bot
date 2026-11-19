@@ -136,6 +136,8 @@ def _fingerprint(content: str) -> str:
     ):
         if kw in content.lower():
             parts.append(kw)
+    # Container name after the severity emoji, so keyword-less alerts don't share one host bucket.
+    parts.extend(re.findall(r"[🔴🟡🟢⚪🟠]\s*([a-z0-9][a-z0-9_.-]+)", content.lower())[:2])
     if re.search(r"\[udr\s*\|", content, re.IGNORECASE):
         parts.append("udr")
     elif re.search(r"\[node1\s*\|", content, re.IGNORECASE):

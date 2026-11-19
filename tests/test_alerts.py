@@ -719,3 +719,12 @@ async def test_triage_loop_round4_handles_non_dict_forced_answer():
         await cog.on_message(msg)
 
     msg.reply.assert_called_once()
+
+
+def test_fingerprint_distinguishes_containers_on_same_host():
+    from cogs.alerts import _fingerprint
+    a = "[node1 | review] 16:52 UTC\n🟡 homelab-adguard-exporter: Persistent 404 errors"
+    b = "[node1 | review] 20:52 UTC\n🟡 monitoring-loki: Persistent ingestion failures"
+    c = "[node1 | infra] 20:54 UTC\n🔴 homelab-vector Vector is repeatedly failing"
+    assert len({_fingerprint(a), _fingerprint(b), _fingerprint(c)}) == 3
+    assert _fingerprint(a) == _fingerprint(a.replace("16:52", "17:07"))
