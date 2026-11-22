@@ -31,11 +31,11 @@ ignore:
   SNYK-DEBIAN13-ACL-17677866:
     - '*':
         reason: No upstream fix in Debian 13; no known exploit
-        expires: '2027-01-01T00:00:00.000Z'
+        expires: '2027-05-21T00:00:00.000Z'
   SNYK-DEBIAN13-ACL-17677882:
     - '*':
         reason: No upstream fix in Debian 13; no known exploit
-        expires: '2027-01-01T00:00:00.000Z'
+        expires: '2027-05-21T00:00:00.000Z'
   # apt
   SNYK-DEBIAN13-APT-5675173:
     - '*':
@@ -45,7 +45,7 @@ ignore:
   SNYK-DEBIAN13-ATTR-17678182:
     - '*':
         reason: No upstream fix in Debian 13; no known exploit
-        expires: '2027-01-01T00:00:00.000Z'
+        expires: '2027-05-21T00:00:00.000Z'
   # bzip2
   SNYK-DEBIAN13-BZIP2-17099839:
     - '*':
